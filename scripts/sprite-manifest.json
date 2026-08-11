@@ -1,0 +1,12 @@
+{
+  "herald": "assets/pixellab/characters/herald/Idle/animations",
+  "guildmaster": "assets/pixellab/characters/guildmaster/Idle/animations",
+  "steward": "assets/pixellab/characters/steward/Idle/animations",
+  "pathfinder": "assets/pixellab/characters/pathfinder/Idle/animations",
+  "courier": "assets/pixellab/characters/courier/Idle/animations",
+  "archivist": "assets/pixellab/characters/archivist/Idle/animations",
+  "genealogist": "assets/pixellab/characters/genealogist/Idle/animations",
+  "chronicler": "assets/pixellab/characters/chronicler/Idle/animations",
+  "counselor": "assets/pixellab/characters/counselor/Idle/animations",
+  "assayer": "assets/pixellab/characters/assayer/Idle/animations"
+}

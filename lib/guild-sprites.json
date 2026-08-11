@@ -1,0 +1,142 @@
+{
+  "herald": {
+    "idle": {
+      "file": "/guild/sprites/herald-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/herald-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "guildmaster": {
+    "idle": {
+      "file": "/guild/sprites/guildmaster-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/guildmaster-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "steward": {
+    "idle": {
+      "file": "/guild/sprites/steward-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/steward-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "pathfinder": {
+    "idle": {
+      "file": "/guild/sprites/pathfinder-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/pathfinder-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "courier": {
+    "idle": {
+      "file": "/guild/sprites/courier-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/courier-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "archivist": {
+    "idle": {
+      "file": "/guild/sprites/archivist-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/archivist-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "genealogist": {
+    "idle": {
+      "file": "/guild/sprites/genealogist-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/genealogist-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "chronicler": {
+    "idle": {
+      "file": "/guild/sprites/chronicler-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/chronicler-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "counselor": {
+    "idle": {
+      "file": "/guild/sprites/counselor-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/counselor-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  },
+  "assayer": {
+    "idle": {
+      "file": "/guild/sprites/assayer-idle.png",
+      "frames": 5,
+      "frameWidth": 92,
+      "frameHeight": 92
+    },
+    "work": {
+      "file": "/guild/sprites/assayer-work.png",
+      "frames": 7,
+      "frameWidth": 92,
+      "frameHeight": 92
+    }
+  }
+}

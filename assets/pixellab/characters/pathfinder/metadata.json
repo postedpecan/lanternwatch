@@ -1,0 +1,53 @@
+{
+  "group_id": "ece1092f-df3d-408c-ab6d-f5db2f5cb197",
+  "states": [
+    {
+      "character": {
+        "id": "53f2d399-671f-40af-af80-2709c300c295",
+        "name": "Idle",
+        "prompt": "Full-body front-readable fantasy guild staff character for a luxury clean minimal guild. Modern high-end anime-inspired pixel art, crisp deliberate pixels, expressive face, selective dark outline, detailed clustered shading, elegant chibi proportions. Cohesive uniform palette across the guild: ivory, charcoal, deep burgundy, muted teal, restrained brushed-gold accents. No text, no logo, no background. Adventurous young woman with chestnut braid, fitted charcoal travel coat, muted teal half-cape, burgundy belt, brass compass and folded map case; observant ready posture.",
+        "size": {
+          "width": 92,
+          "height": 92
+        },
+        "template_id": "mannequin",
+        "directions": 4,
+        "view": "side",
+        "created_at": "2026-08-09T02:22:29.338948+00:00"
+      },
+      "folder": "Idle",
+      "frames": {
+        "rotations": {
+          "south": "Idle/rotations/south.png",
+          "west": "Idle/rotations/west.png",
+          "east": "Idle/rotations/east.png",
+          "north": "Idle/rotations/north.png"
+        },
+        "animations": {
+          "idle": {
+            "south": [
+              "Idle/animations/idle/south/frame_000.png",
+              "Idle/animations/idle/south/frame_001.png",
+              "Idle/animations/idle/south/frame_002.png",
+              "Idle/animations/idle/south/frame_003.png",
+              "Idle/animations/idle/south/frame_004.png"
+            ]
+          },
+          "work": {
+            "south": [
+              "Idle/animations/work/south/frame_000.png",
+              "Idle/animations/work/south/frame_001.png",
+              "Idle/animations/work/south/frame_002.png",
+              "Idle/animations/work/south/frame_003.png",
+              "Idle/animations/work/south/frame_004.png",
+              "Idle/animations/work/south/frame_005.png",
+              "Idle/animations/work/south/frame_006.png"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "export_version": "3.1",
+  "export_date": "2026-08-09T02:37:51.509466"
+}

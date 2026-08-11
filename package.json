@@ -1,0 +1,48 @@
+{
+  "name": "lanternwatch-guild-hall",
+  "version": "1.0.0",
+  "description": "Local dashboard for Codex and Claude Code agent lifecycle activity, SQLite history, and Obsidian exports.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/postedpecan/lanternwatch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/postedpecan/lanternwatch/issues"
+  },
+  "keywords": [
+    "agent-observability",
+    "codex",
+    "claude-code",
+    "nextjs",
+    "sqlite",
+    "obsidian"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "test": "node --test scripts/guild-roles.test.mjs scripts/guild-lifecycle-hook.test.mjs scripts/merge-hooks.test.mjs scripts/merge-claude-hooks.test.mjs components/guild/hook-diagnostic.test.mjs lib/guild-format.test.mjs",
+    "build:sprites": "node scripts/build-sprites.mjs",
+    "guild:report": "node scripts/guild-report.mjs",
+    "guild:install": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch.ps1",
+    "guild:install:claude": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch-claude.ps1",
+    "guild:rehook": "powershell -ExecutionPolicy Bypass -File scripts/reinstall-lanternwatch-hooks.ps1",
+    "guild:simulate": "node scripts/simulate-lifecycle.mjs"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "sharp": "^0.35.3",
+    "typescript": "latest"
+  }
+}
