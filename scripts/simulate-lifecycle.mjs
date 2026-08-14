@@ -86,7 +86,7 @@ const receipts = readFileSync(receiptPath, "utf8")
   .map((line) => JSON.parse(line))
   .filter((receipt) => receipt.sessionId === sessionId && receipt.turnId === turnId);
 const after = await readHealth(apiUrl);
-if (after.payload.hookLogStatus !== "ok" || after.payload.lastHookEvent !== "Stop") {
+if (after.payload.hookLogStatus !== "ok" || after.payload.lastHookEvent !== "Stop" || after.payload.lastHookSource !== "codex") {
   throw new Error(`Lifecycle health did not clear after simulation (status ${after.payload.hookLogStatus || "unknown"}).`);
 }
 process.stdout.write(`${JSON.stringify({
@@ -100,4 +100,5 @@ process.stdout.write(`${JSON.stringify({
   healthUrl: after.url,
   hookLogStatus: after.payload.hookLogStatus,
   lastHookEvent: after.payload.lastHookEvent,
+  lastHookSource: after.payload.lastHookSource,
 })}\n`);

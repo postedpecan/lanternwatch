@@ -8,46 +8,47 @@ one-off task details, or rules already present in `AGENTS.md`.
 
 ---
 
-## Clarifier Agent
+## Business Analyst
 *(no preferences recorded yet)*
 
-## Dispatcher Agent
+## Program Manager
 *(no preferences recorded yet)*
 
-## Tracker Agent
+## Operations Coordinator
 *(no preferences recorded yet)*
 
-## Technical Research Agent
+## Technical Researcher
 *(no preferences recorded yet)*
 
-## News Research Agent
+## Market Intelligence Analyst
 *(no preferences recorded yet)*
 
-## Codebase Logic Agent
+## Systems Analyst
 *(no preferences recorded yet)*
 
-## Codebase History Agent
+## Change Management Analyst
 *(no preferences recorded yet)*
 
-## Hookwright Agent
+## Platform Engineer
 *(no preferences recorded yet)*
 
-## Interface Weaver Agent
+## Frontend Engineer
+- For the Lanternwatch dashboard, prefer compact information density and keep profile/about metadata optional instead of persistently occupying the page.
+  Why: The user found the profile-style layout too large and asked to move the profile elsewhere while compacting the UI.
+
+## Data Engineer
 *(no preferences recorded yet)*
 
-## Ledgerkeeper Agent
+## QA Engineer
 *(no preferences recorded yet)*
 
-## Prover Agent
+## Technical Writer
 *(no preferences recorded yet)*
 
-## Chronicle Writer Agent
+## Strategy Consultant
 *(no preferences recorded yet)*
 
-## Memo Writer Agent
-*(no preferences recorded yet)*
-
-## Auditor Agent
+## Compliance Reviewer
 *(no preferences recorded yet)*
 
 ---

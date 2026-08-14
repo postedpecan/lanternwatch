@@ -6,9 +6,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AGENT_IDS, type AgentId, type RoomStatus } from "@/lib/guild-data";
-import { ageSeconds, parseLatestHookLog, type HookLogStatus } from "@/lib/guild-health";
+import { ageSeconds, parseLatestHookLog, type HookLogStatus, type HookSource } from "@/lib/guild-health";
 import type {
   DashboardPayload,
+  GuildAgentActivity,
   GuildStorageHealth,
   GuildStatistics,
   GuildProject,
@@ -20,6 +21,7 @@ import type {
 const DEFAULT_STORAGE_ROOT = path.join(homedir(), ".lanternwatch");
 const roomStatuses = new Set<RoomStatus>(["waiting", "queued", "working", "complete", "interrupted", "stalled"]);
 const STALE_AFTER_SECONDS = Number(process.env.LANTERNWATCH_STALE_AFTER_SECONDS || 600);
+const SCHEMA_VERSION = 4;
 
 type DatabaseState = {
   database: DatabaseSync;
@@ -88,6 +90,7 @@ function readHookDiagnostics(target: string): {
   receiptAt: string | null;
   event: string | null;
   stage: string | null;
+  source: HookSource | null;
 } {
   try {
     return parseLatestHookLog(readFileSync(target, "utf8"));
@@ -98,30 +101,13 @@ function readHookDiagnostics(target: string): {
       receiptAt: null,
       event: null,
       stage: null,
+      source: null,
     };
   }
 }
 
-function getDatabase() {
-  const target = databasePath();
-  if (globalStore.lanternwatchDatabase?.path === target) {
-    const current = globalStore.lanternwatchDatabase;
-    if (current.schemaVersion !== 2) {
-      current.database.exec("PRAGMA busy_timeout = 3000");
-      const runColumns = current.database.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
-      if (!runColumns.some((column) => column.name === "outcome")) current.database.exec("ALTER TABLE runs ADD COLUMN outcome TEXT");
-      const eventColumns = current.database.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>;
-      if (!eventColumns.some((column) => column.name === "agent_instance_id")) current.database.exec("ALTER TABLE events ADD COLUMN agent_instance_id TEXT");
-      current.database.exec("UPDATE runs SET completed_at = (SELECT MIN(occurred_at) FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')) WHERE status = 'complete' AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted'))");
-      current.schemaVersion = 2;
-    }
-    return current.database;
-  }
-
-  mkdirSync(path.dirname(target), { recursive: true });
-  const database = new DatabaseSync(target);
+function ensureSchema(database: DatabaseSync) {
   database.exec(`
-    PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 3000;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS projects (
@@ -157,15 +143,45 @@ function getDatabase() {
     CREATE INDEX IF NOT EXISTS runs_project_updated ON runs(project_id, updated_at DESC);
   `);
   const runColumns = database.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
-  if (!runColumns.some((column) => column.name === "outcome")) {
-    database.exec("ALTER TABLE runs ADD COLUMN outcome TEXT");
-  }
+  if (!runColumns.some((column) => column.name === "outcome")) database.exec("ALTER TABLE runs ADD COLUMN outcome TEXT");
+  if (!runColumns.some((column) => column.name === "source_run_id")) database.exec("ALTER TABLE runs ADD COLUMN source_run_id TEXT");
   const eventColumns = database.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>;
-  if (!eventColumns.some((column) => column.name === "agent_instance_id")) {
-    database.exec("ALTER TABLE events ADD COLUMN agent_instance_id TEXT");
+  if (!eventColumns.some((column) => column.name === "agent_instance_id")) database.exec("ALTER TABLE events ADD COLUMN agent_instance_id TEXT");
+  if (!eventColumns.some((column) => column.name === "source_event_id")) database.exec("ALTER TABLE events ADD COLUMN source_event_id TEXT");
+  database.exec(`
+    UPDATE runs SET source_run_id = id WHERE source_run_id IS NULL OR source_run_id = '';
+    UPDATE events SET source_event_id = event_id WHERE source_event_id IS NULL OR source_event_id = '';
+    CREATE UNIQUE INDEX IF NOT EXISTS runs_project_source_id ON runs(project_id, source_run_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS events_project_source_id ON events(project_id, source_event_id);
+    UPDATE runs
+      SET completed_at = (
+        SELECT MIN(occurred_at) FROM events
+        WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')
+      )
+      WHERE status = 'complete'
+        AND EXISTS (
+          SELECT 1 FROM events
+          WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')
+        );
+  `);
+}
+
+function getDatabase() {
+  const target = databasePath();
+  if (globalStore.lanternwatchDatabase?.path === target) {
+    const current = globalStore.lanternwatchDatabase;
+    if (current.schemaVersion !== SCHEMA_VERSION) {
+      ensureSchema(current.database);
+      current.schemaVersion = SCHEMA_VERSION;
+    }
+    return current.database;
   }
-  database.exec("UPDATE runs SET completed_at = (SELECT MIN(occurred_at) FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')) WHERE status = 'complete' AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted'))");
-  globalStore.lanternwatchDatabase = { database, path: target, schemaVersion: 2 };
+
+  mkdirSync(path.dirname(target), { recursive: true });
+  const database = new DatabaseSync(target);
+  database.exec("PRAGMA journal_mode = WAL");
+  ensureSchema(database);
+  globalStore.lanternwatchDatabase = { database, path: target, schemaVersion: SCHEMA_VERSION };
   return database;
 }
 
@@ -185,6 +201,17 @@ function normalizeDate(value: unknown) {
 
 function projectIdFor(projectPath: string) {
   return createHash("sha256").update(projectPath.toLocaleLowerCase()).digest("hex").slice(0, 20);
+}
+
+function scopedStorageId(kind: "run" | "event", projectId: string, sourceId: string) {
+  const digest = createHash("sha256").update(`${projectId}\0${sourceId}`).digest("hex").slice(0, 32);
+  return `${kind}:${projectId}:${digest}`;
+}
+
+function resolveRunStorageId(database: DatabaseSync, projectId: string, sourceRunId: string) {
+  const row = database.prepare("SELECT id FROM runs WHERE project_id = ? AND source_run_id = ?")
+    .get(projectId, sourceRunId) as { id: string } | undefined;
+  return row?.id ?? scopedStorageId("run", projectId, sourceRunId);
 }
 
 function safeAgent(value: unknown): AgentId {
@@ -215,6 +242,7 @@ function rowToRun(row: Record<string, unknown>): GuildRun {
   const end = row.completed_at ? String(row.completed_at) : stale ? String(row.updated_at) : new Date().toISOString();
   return {
     id: String(row.id),
+    sourceRunId: String(row.source_run_id || row.id),
     projectId: String(row.project_id),
     quest: String(row.quest || ""),
     status,
@@ -229,7 +257,7 @@ function rowToEvent(row: Record<string, unknown>, startedAt: string): StoredGuil
   const occurredAt = String(row.occurred_at);
   return {
     id: Number(row.id),
-    eventId: String(row.event_id),
+    eventId: String(row.source_event_id || row.event_id),
     projectId: String(row.project_id),
     runId: String(row.run_id),
     agent: safeAgent(row.agent),
@@ -244,7 +272,8 @@ function rowToEvent(row: Record<string, unknown>, startedAt: string): StoredGuil
 }
 
 function noteFileName(run: GuildRun) {
-  return `${run.startedAt.slice(0, 10)}-${run.id.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 64)}.md`;
+  const scopedName = `${run.projectId}-${run.sourceRunId}`;
+  return `${run.startedAt.slice(0, 10)}-${scopedName.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 64)}.md`;
 }
 
 function exportRun(database: DatabaseSync, runId: string) {
@@ -265,7 +294,7 @@ function exportRun(database: DatabaseSync, runId: string) {
     "---",
     `project: ${yamlText(project.name)}`,
     `project_path: ${yamlText(project.path)}`,
-    `run_id: ${yamlText(run.id)}`,
+    `run_id: ${yamlText(run.sourceRunId)}`,
     `status: ${run.status}`,
     `started: ${run.startedAt}`,
     `completed: ${run.completedAt || ""}`,
@@ -299,7 +328,9 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
   const message = cleanText(input.message, `${agent} changed state to ${status}.`, 1000);
   const quest = cleanText(input.quest, "", 1000);
   const from = input.from ? safeAgent(input.from) : null;
-  const runId = cleanText(input.runId, `${projectId}-${occurredAt.slice(0, 19)}`, 180);
+  const sourceRunId = cleanText(input.runId, `${projectId}-${occurredAt.slice(0, 19)}`, 180);
+  const runId = resolveRunStorageId(database, projectId, sourceRunId);
+  const storedEventId = scopedStorageId("event", projectId, eventId);
   const receivedAt = new Date().toISOString();
   const runComplete = input.runComplete === true || status === "interrupted";
   const outcome = status === "interrupted" ? "interrupted" : runComplete ? "complete" : null;
@@ -309,7 +340,8 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
     return { eventId, projectId, runId, inserted: false };
   }
 
-  const duplicate = database.prepare("SELECT project_id, run_id FROM events WHERE event_id = ?").get(eventId) as { project_id: string; run_id: string } | undefined;
+  const duplicate = database.prepare("SELECT project_id, run_id FROM events WHERE project_id = ? AND source_event_id = ?")
+    .get(projectId, eventId) as { project_id: string; run_id: string } | undefined;
   if (duplicate) return { eventId, projectId: duplicate.project_id, runId: duplicate.run_id, inserted: false };
 
   database.exec("BEGIN IMMEDIATE");
@@ -320,20 +352,20 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, path = excluded.path, last_seen_at = excluded.last_seen_at
     `).run(projectId, projectName, projectPath, receivedAt);
     database.prepare(`
-      INSERT INTO runs (id, project_id, quest, status, started_at, completed_at, updated_at, outcome)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO runs (id, project_id, source_run_id, quest, status, started_at, completed_at, updated_at, outcome)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         quest = CASE WHEN excluded.quest <> '' THEN excluded.quest ELSE runs.quest END,
         status = CASE WHEN excluded.status = 'complete' THEN 'complete' ELSE runs.status END,
         completed_at = COALESCE(runs.completed_at, excluded.completed_at),
         updated_at = excluded.updated_at,
         outcome = COALESCE(excluded.outcome, runs.outcome)
-    `).run(runId, projectId, quest, runComplete ? "complete" : "working", occurredAt, runComplete ? occurredAt : null, receivedAt, outcome);
+    `).run(runId, projectId, sourceRunId, quest, runComplete ? "complete" : "working", occurredAt, runComplete ? occurredAt : null, receivedAt, outcome);
     result = database.prepare(`
       INSERT OR IGNORE INTO events
-        (event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(eventId, projectId, runId, agent, status, message, quest || null, from, occurredAt, receivedAt, cleanText(input.agentInstanceId, "", 180) || null);
+        (event_id, source_event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(storedEventId, eventId, projectId, runId, agent, status, message, quest || null, from, occurredAt, receivedAt, cleanText(input.agentInstanceId, "", 180) || null);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -350,20 +382,19 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const agentRunCounts = Object.fromEntries(AGENT_IDS.map((agent) => [agent, 0])) as Record<AgentId, number>;
   const projectRows = database.prepare("SELECT * FROM projects ORDER BY last_seen_at DESC").all() as Record<string, unknown>[];
   const projects = projectRows.map(rowToProject);
-  const selectedProjectId = projects.some((project) => project.id === projectId)
-    ? projectId!
-    : projects[0]?.id ?? null;
-  if (!selectedProjectId) {
-    const statistics: GuildStatistics = { totalRuns: 0, completedRuns: 0, interruptedRuns: 0, activeRuns: 0, stalledRuns: 0, completionRate: 0, averageDurationSeconds: 0, totalRuntimeSeconds: 0, mostUsedAgent: null, mostUsedAgentRuns: 0 };
-    return { projects, selectedProjectId: null, run: null, runs: [], events: [], agentRunCounts, statistics, serverTime: new Date().toISOString() };
-  }
-
-  const countRows = database.prepare(`
+  // Missing, empty, and unknown project IDs deliberately mean the global scope.
+  // This keeps stale bookmarks non-breaking while making project selection optional.
+  const selectedProjectId = projectId && projects.some((project) => project.id === projectId) ? projectId : null;
+  const countRows = selectedProjectId ? database.prepare(`
     SELECT agent, COUNT(DISTINCT run_id) AS count
     FROM events
     WHERE project_id = ?
     GROUP BY agent
-  `).all(selectedProjectId) as Array<{ agent: string; count: number }>;
+  `).all(selectedProjectId) : database.prepare(`
+    SELECT agent, COUNT(DISTINCT run_id) AS count
+    FROM events
+    GROUP BY agent
+  `).all() as Array<{ agent: string; count: number }>;
   for (const row of countRows) {
     if (AGENT_IDS.includes(row.agent as AgentId)) {
       agentRunCounts[row.agent as AgentId] = Number(row.count);
@@ -371,17 +402,88 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   }
 
   const staleCutoff = new Date(Date.now() - STALE_AFTER_SECONDS * 1000).toISOString();
-  const recentRows = database.prepare("SELECT * FROM runs WHERE project_id = ? ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(selectedProjectId, staleCutoff) as Record<string, unknown>[];
+  const recentRows = (selectedProjectId
+    ? database.prepare("SELECT * FROM runs WHERE project_id = ? ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(selectedProjectId, staleCutoff)
+    : database.prepare("SELECT * FROM runs ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(staleCutoff)) as Record<string, unknown>[];
   const runs = recentRows.map(rowToRun);
-  const requestedRow = requestedRunId
-    ? database.prepare("SELECT * FROM runs WHERE id = ? AND project_id = ?").get(requestedRunId, selectedProjectId) as Record<string, unknown> | undefined
-    : undefined;
+  const requestedRow = requestedRunId ? (selectedProjectId
+    ? database.prepare(`
+        SELECT * FROM runs
+        WHERE project_id = ? AND (id = ? OR source_run_id = ?)
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
+      `).get(selectedProjectId, requestedRunId, requestedRunId, requestedRunId)
+    : database.prepare(`
+        SELECT * FROM runs
+        WHERE id = ? OR source_run_id = ?
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
+      `).get(requestedRunId, requestedRunId, requestedRunId)) as Record<string, unknown> | undefined : undefined;
   const run = requestedRow ? rowToRun(requestedRow) : runs[0] ?? null;
   const eventRows = run
-    ? database.prepare("SELECT * FROM events WHERE run_id = ? ORDER BY occurred_at, id").all(run.id) as Record<string, unknown>[]
+    ? database.prepare("SELECT * FROM events WHERE run_id = ? AND project_id = ? ORDER BY occurred_at, id").all(run.id, run.projectId) as Record<string, unknown>[]
     : [];
   const events = run ? eventRows.map((row) => rowToEvent(row, run.startedAt)) : [];
-  const aggregate = database.prepare(`
+  const recentEventRows = (selectedProjectId ? database.prepare(`
+    SELECT events.*, runs.started_at AS run_started_at
+    FROM events JOIN runs ON runs.id = events.run_id
+    WHERE events.project_id = ?
+    ORDER BY events.occurred_at DESC, events.id DESC LIMIT 100
+  `).all(selectedProjectId) : database.prepare(`
+    SELECT events.*, runs.started_at AS run_started_at
+    FROM events JOIN runs ON runs.id = events.run_id
+    ORDER BY events.occurred_at DESC, events.id DESC LIMIT 100
+  `).all()) as Record<string, unknown>[];
+  const recentEvents = recentEventRows.map((row) => rowToEvent(row, String(row.run_started_at)));
+
+  const activityRows = (selectedProjectId ? database.prepare(`
+    SELECT events.*, projects.name AS project_name
+    FROM events
+    JOIN runs ON runs.id = events.run_id
+    JOIN projects ON projects.id = events.project_id
+    WHERE runs.project_id = ? AND runs.status = 'working' AND runs.updated_at >= ?
+    ORDER BY events.occurred_at, events.id
+  `).all(selectedProjectId, staleCutoff) : database.prepare(`
+    SELECT events.*, projects.name AS project_name
+    FROM events
+    JOIN runs ON runs.id = events.run_id
+    JOIN projects ON projects.id = events.project_id
+    WHERE runs.status = 'working' AND runs.updated_at >= ?
+    ORDER BY events.occurred_at, events.id
+  `).all(staleCutoff)) as Record<string, unknown>[];
+  type ActivityState = Omit<GuildAgentActivity, "durationSeconds"> & { active: boolean };
+  const activityById = new Map<string, ActivityState>();
+  for (const row of activityRows) {
+    const agent = safeAgent(row.agent);
+    const runId = String(row.run_id);
+    const project = String(row.project_id);
+    const instance = row.agent_instance_id ? String(row.agent_instance_id) : `legacy:${runId}:${agent}`;
+    const id = `${project}:${runId}:${instance}`;
+    const status = safeStatus(row.status);
+    const active = status === "working" || status === "queued";
+    const previous = activityById.get(id);
+    activityById.set(id, {
+      id,
+      agentInstanceId: instance,
+      agent,
+      projectId: project,
+      projectName: String(row.project_name),
+      runId,
+      status: active ? status : previous?.status ?? "working",
+      message: String(row.message),
+      startedAt: active && previous?.active ? previous.startedAt : String(row.occurred_at),
+      updatedAt: String(row.occurred_at),
+      active,
+    });
+  }
+  const serverTime = new Date().toISOString();
+  const agentActivities = [...activityById.values()]
+    .filter((activity) => activity.active)
+    .map(({ active: _active, ...activity }): GuildAgentActivity => ({
+      ...activity,
+      durationSeconds: Math.max(0, Math.floor((Date.parse(serverTime) - Date.parse(activity.startedAt)) / 1000)),
+    }))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+
+  const aggregate = (selectedProjectId ? database.prepare(`
     SELECT COUNT(*) AS total_runs,
       SUM(CASE WHEN status = 'complete' AND COALESCE(outcome, 'complete') = 'complete' THEN 1 ELSE 0 END) AS completed_runs,
       SUM(CASE WHEN outcome = 'interrupted' THEN 1 ELSE 0 END) AS interrupted_runs,
@@ -389,7 +491,15 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
       SUM(CASE WHEN status = 'working' AND updated_at < ? THEN 1 ELSE 0 END) AS stalled_runs,
       CAST(COALESCE(SUM(CASE WHEN status = 'complete' THEN (julianday(COALESCE(completed_at, updated_at)) - julianday(started_at)) * 86400 ELSE 0 END), 0) AS INTEGER) AS total_runtime_seconds
     FROM runs WHERE project_id = ?
-  `).get(staleCutoff, staleCutoff, selectedProjectId) as Record<string, number>;
+  `).get(staleCutoff, staleCutoff, selectedProjectId) : database.prepare(`
+    SELECT COUNT(*) AS total_runs,
+      SUM(CASE WHEN status = 'complete' AND COALESCE(outcome, 'complete') = 'complete' THEN 1 ELSE 0 END) AS completed_runs,
+      SUM(CASE WHEN outcome = 'interrupted' THEN 1 ELSE 0 END) AS interrupted_runs,
+      SUM(CASE WHEN status = 'working' AND updated_at >= ? THEN 1 ELSE 0 END) AS active_runs,
+      SUM(CASE WHEN status = 'working' AND updated_at < ? THEN 1 ELSE 0 END) AS stalled_runs,
+      CAST(COALESCE(SUM(CASE WHEN status = 'complete' THEN (julianday(COALESCE(completed_at, updated_at)) - julianday(started_at)) * 86400 ELSE 0 END), 0) AS INTEGER) AS total_runtime_seconds
+    FROM runs
+  `).get(staleCutoff, staleCutoff)) as Record<string, number>;
   const completedRuns = Number(aggregate.completed_runs || 0);
   const interruptedRuns = Number(aggregate.interrupted_runs || 0);
   const activeRuns = Number(aggregate.active_runs || 0);
@@ -410,7 +520,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     mostUsedAgent: mostUsedAgentRuns > 0 ? mostUsedAgent : null,
     mostUsedAgentRuns,
   };
-  return { projects, selectedProjectId, run, runs, events, agentRunCounts, statistics, serverTime: new Date().toISOString() };
+  return { projects, selectedProjectId, run, runs, events, recentEvents, agentActivities, agentRunCounts, statistics, serverTime };
 }
 
 export function getStorageHealth(): GuildStorageHealth {
@@ -442,5 +552,6 @@ export function getStorageHealth(): GuildStorageHealth {
     lastHookReceiptAgeSeconds: ageSeconds(hook.receiptAt),
     lastHookEvent: hook.event,
     lastHookStage: hook.stage,
+    lastHookSource: hook.source,
   };
 }

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { lanternwatchRuntimePaths, lifecycleStoragePaths } from "./guild-paths.mjs";
 import { existingNotifierCommand } from "./guild-notify.mjs";
+import { heartbeatEvent } from "./guild-heartbeat.mjs";
 import { reportEvent } from "./guild-report.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,8 +165,10 @@ test("valid hook stdin creates a receipt beside a DB-only override and reaches t
     const receipts = readFileSync(path.join(root, "logs", "hook.jsonl"), "utf8").trim().split(/\r?\n/).map(JSON.parse);
     assert.equal(receipts.at(-1).stage, "received");
     assert.equal(receipts.at(-1).event, "Stop");
+    assert.equal(receipts.at(-1).source, "codex");
     assert.equal(bodies.length, 1);
     assert.equal(bodies[0].eventId, "hook-stop-session-valid-turn-valid");
+    assert.equal(bodies[0].source, "codex");
   } finally {
     await closeServer(server);
   }
@@ -187,11 +190,23 @@ test("claude source reads prompt_id (not turn_id) and labels events as Claude Co
     assert.equal(bodies.length, 1);
     assert.equal(bodies[0].eventId, "hook-stop-session-claude-prompt-claude");
     assert.equal(bodies[0].runId, "claude-session-claude-prompt-claude");
+    assert.equal(bodies[0].source, "claude");
     assert.match(bodies[0].message, /Claude Code/);
     assert.match(bodies[0].quest, /Claude Code/);
+    const receipts = readFileSync(path.join(root, "logs", "hook.jsonl"), "utf8").trim().split(/\r?\n/).map(JSON.parse);
+    assert.equal(receipts.at(-1).source, "claude");
   } finally {
     await closeServer(server);
   }
+});
+
+test("heartbeat source and quest follow the host while legacy state remains compatible", () => {
+  const claude = heartbeatEvent({ cwd: projectRoot, source: "claude" }, "claude-session-prompt", "2026-08-12T00:00:00.000Z");
+  assert.equal(claude.source, "claude");
+  assert.equal(claude.quest, "Claude Code task");
+  const legacyCodex = heartbeatEvent({ cwd: projectRoot }, "codex-session-turn", "2026-08-12T00:00:00.000Z");
+  assert.equal(legacyCodex.source, "codex");
+  assert.equal(legacyCodex.quest, "Codex task");
 });
 
 test("SubagentStart/SubagentStop with an ambiguous agent_type skip the automatic dashboard report but still log it", async () => {
@@ -285,6 +300,34 @@ test("SubagentStart/SubagentStop with a confidently-mapped agent_type still auto
   }
 });
 
+test("company-title task aliases produce canonical receipt and API identities", async () => {
+  const root = fixture("company-title-subagent");
+  const { server, bodies, url } = await startEventServer();
+  try {
+    const result = await runHook(JSON.stringify({
+      hook_event_name: "SubagentStart",
+      session_id: "session-company",
+      turn_id: "turn-company",
+      agent_id: "agent-company",
+      agent_type: "/root/frontend_engineer_dashboard",
+      cwd: projectRoot,
+    }), isolatedEnvironment(root, url));
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].agent, "interface-weaver");
+    assert.equal(bodies[0].agentInstanceId, "agent-company");
+    assert.equal(bodies[0].message, "A team member began assigned work.");
+
+    const receipt = JSON.parse(readFileSync(path.join(root, "logs", "hook.jsonl"), "utf8").trim());
+    assert.equal(receipt.agent, "interface-weaver");
+    assert.equal(receipt.agentInstanceId, "agent-company");
+    assert.equal(receipt.note, undefined);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("malformed hook stdin records a parse receipt and remains non-blocking", async () => {
   const root = fixture("malformed-receipt");
   const result = await runHook("{not-json", isolatedEnvironment(root, "http://127.0.0.1:1/api/guild/events"));
@@ -293,6 +336,7 @@ test("malformed hook stdin records a parse receipt and remains non-blocking", as
   const receipt = JSON.parse(readFileSync(path.join(root, "logs", "hook.jsonl"), "utf8").trim());
   assert.equal(receipt.stage, "parse");
   assert.equal(receipt.event, "invalid");
+  assert.equal(receipt.source, "codex");
   assert.equal(receipt.name, "SyntaxError");
 });
 
@@ -365,9 +409,47 @@ test("reporter falls back to the isolated SQLite database after API failure", as
     });
     assert.equal(destination, "sqlite");
     const database = new DatabaseSync(databasePath, { readOnly: true });
-    const row = database.prepare("SELECT event_id FROM events WHERE event_id = ?").get("api-fallback-event");
+    const row = database.prepare("SELECT source_event_id FROM events WHERE source_event_id = ?").get("api-fallback-event");
     database.close();
-    assert.equal(row.event_id, "api-fallback-event");
+    assert.equal(row.source_event_id, "api-fallback-event");
+  } finally {
+    if (previous.api === undefined) delete process.env.LANTERNWATCH_API_URL; else process.env.LANTERNWATCH_API_URL = previous.api;
+    if (previous.database === undefined) delete process.env.LANTERNWATCH_DB_PATH; else process.env.LANTERNWATCH_DB_PATH = previous.database;
+    if (previous.vault === undefined) delete process.env.LANTERNWATCH_VAULT_PATH; else process.env.LANTERNWATCH_VAULT_PATH = previous.vault;
+  }
+});
+
+test("reporter persists only canonical IDs when given company-title aliases", async () => {
+  const root = fixture("company-title-persistence");
+  const databasePath = path.join(root, "guild.db");
+  const previous = {
+    api: process.env.LANTERNWATCH_API_URL,
+    database: process.env.LANTERNWATCH_DB_PATH,
+    vault: process.env.LANTERNWATCH_VAULT_PATH,
+  };
+  process.env.LANTERNWATCH_API_URL = "http://127.0.0.1:1/api/guild/events";
+  process.env.LANTERNWATCH_DB_PATH = databasePath;
+  process.env.LANTERNWATCH_VAULT_PATH = "";
+  try {
+    const destination = await reportEvent({
+      eventId: "company-title-event",
+      projectPath: projectRoot,
+      projectName: "Lanternwatch",
+      runId: "company-title-run",
+      agent: "Compliance Reviewer",
+      from: "/root/strategy_consultant_memo",
+      status: "complete",
+      message: "Company-title compatibility fixture.",
+      quest: "Lifecycle test",
+      occurredAt: new Date().toISOString(),
+      runComplete: true,
+    });
+    assert.equal(destination, "sqlite");
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const row = database.prepare("SELECT agent, from_agent FROM events WHERE source_event_id = ?").get("company-title-event");
+    database.close();
+    assert.equal(row.agent, "assayer");
+    assert.equal(row.from_agent, "counselor");
   } finally {
     if (previous.api === undefined) delete process.env.LANTERNWATCH_API_URL; else process.env.LANTERNWATCH_API_URL = previous.api;
     if (previous.database === undefined) delete process.env.LANTERNWATCH_DB_PATH; else process.env.LANTERNWATCH_DB_PATH = previous.database;

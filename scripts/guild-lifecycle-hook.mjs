@@ -46,6 +46,7 @@ function appendHookLog(entry) {
 function logFailure(stage, error, event = "invalid", currentSessionId = "session") {
   appendHookLog({
     at: new Date().toISOString(),
+    source: SOURCE,
     stage,
     event: supportedEvents.has(event) ? event : "invalid",
     sessionId: safe(currentSessionId, "session"),
@@ -62,7 +63,7 @@ const turnId = safe(payload[TURN_FIELD], "turn");
 const cwd = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
 const runId = `${SOURCE}-${sessionId}-${turnId}`;
 const now = new Date().toISOString();
-const base = { projectPath: cwd, projectName: path.basename(cwd), runId, quest: `${HOST_LABEL} task`, occurredAt: now };
+const base = { projectPath: cwd, projectName: path.basename(cwd), runId, source: SOURCE, quest: `${HOST_LABEL} task`, occurredAt: now };
 
 // Resolved once so the diagnostic receipt and the report/skip decision below
 // agree on the same role and the same matched/ambiguous verdict.
@@ -72,6 +73,7 @@ const agentResolution = (eventName === "SubagentStart" || eventName === "Subagen
 
 const receipt = {
   at: now,
+  source: SOURCE,
   stage: "received",
   event: supportedEvents.has(eventName) ? eventName : "invalid",
   sessionId,
@@ -93,19 +95,19 @@ appendHookLog(receipt);
 
 try {
   if (eventName === "UserPromptSubmit") {
-    saveState(sessionId, { runId, cwd, turnId, open: true });
-    await reportEvent({ ...base, eventId: `hook-start-${sessionId}-${turnId}`, agent: "guildmaster", status: "working", message: `${HOST_LABEL} accepted the commission and began working.` });
+    saveState(sessionId, { runId, cwd, turnId, source: SOURCE, open: true });
+    await reportEvent({ ...base, eventId: `hook-start-${sessionId}-${turnId}`, agent: "guildmaster", status: "working", message: `${HOST_LABEL} accepted the task and began working.` });
     if (process.env.LANTERNWATCH_DISABLE_HEARTBEAT !== "1") {
       spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "guild-heartbeat.mjs"), stateFile(sessionId), runId], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
   } else if (eventName === "Stop") {
     await reportEvent({ ...base, eventId: `hook-stop-${sessionId}-${turnId}`, agent: "guildmaster", status: "complete", message: `${HOST_LABEL} completed the turn and returned to idle.`, runComplete: true });
-    saveState(sessionId, { runId, cwd, turnId, open: false });
+    saveState(sessionId, { runId, cwd, turnId, source: SOURCE, open: false });
   } else if (eventName === "SubagentStart" || eventName === "SubagentStop") {
     if (agentResolution.matched) {
       const agentId = safe(payload.agent_id, "agent");
       const status = eventName === "SubagentStart" ? "working" : "complete";
-      await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentResolution.role, agentInstanceId: agentId, status, message: status === "working" ? "A specialist agent began its assigned work." : "A specialist agent finished its assigned work." });
+      await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentResolution.role, agentInstanceId: agentId, status, message: status === "working" ? "A team member began assigned work." : "A team member finished assigned work." });
     }
     // else: ambiguous agent_type (e.g. the "claude" catch-all) — the
     // diagnostic receipt above already recorded it with a note; skip the
@@ -115,6 +117,6 @@ try {
     // truth for this subagent's dashboard entry.
   } else if (eventName === "SessionEnd") {
     const state = loadState(sessionId);
-    if (state?.open) await reportEvent({ projectPath: state.cwd, projectName: path.basename(state.cwd), runId: state.runId, eventId: `hook-sessionend-${sessionId}`, agent: "guildmaster", status: "interrupted", message: `The ${HOST_LABEL} session ended before the turn reported completion.`, quest: `${HOST_LABEL} task`, occurredAt: now, runComplete: true });
+    if (state?.open) await reportEvent({ projectPath: state.cwd, projectName: path.basename(state.cwd), runId: state.runId, eventId: `hook-sessionend-${sessionId}`, source: SOURCE, agent: "guildmaster", status: "interrupted", message: `The ${HOST_LABEL} session ended before the turn reported completion.`, quest: `${HOST_LABEL} task`, occurredAt: now, runComplete: true });
   }
 } catch (error) { logFailure("handle", error, eventName, sessionId); }

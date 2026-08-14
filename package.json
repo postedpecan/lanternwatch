@@ -25,13 +25,15 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
-    "test": "node --test scripts/guild-roles.test.mjs scripts/guild-lifecycle-hook.test.mjs scripts/merge-hooks.test.mjs scripts/merge-claude-hooks.test.mjs components/guild/hook-diagnostic.test.mjs lib/guild-format.test.mjs",
+    "test": "node --experimental-strip-types --test scripts/guild-roles.test.mjs scripts/guild-lifecycle-hook.test.mjs scripts/merge-hooks.test.mjs scripts/merge-claude-hooks.test.mjs scripts/research-capture.test.mjs components/guild/hook-diagnostic.test.mjs components/guild/project-filter-state.test.mjs lib/appearance.test.mjs lib/guild-data.test.mjs lib/guild-format.test.mjs lib/server/guild-store.test.mjs app/api/guild/dashboard/route.test.mjs",
     "build:sprites": "node scripts/build-sprites.mjs",
     "guild:report": "node scripts/guild-report.mjs",
     "guild:install": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch.ps1",
     "guild:install:claude": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch-claude.ps1",
     "guild:rehook": "powershell -ExecutionPolicy Bypass -File scripts/reinstall-lanternwatch-hooks.ps1",
-    "guild:simulate": "node scripts/simulate-lifecycle.mjs"
+    "guild:simulate": "node scripts/simulate-lifecycle.mjs",
+    "research:capture": "node scripts/research-capture.mjs capture",
+    "research:retry": "node scripts/research-capture.mjs retry"
   },
   "dependencies": {
     "next": "latest",

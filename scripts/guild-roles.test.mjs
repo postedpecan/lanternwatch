@@ -3,10 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { notifyEvent } from "./guild-report.mjs";
+import { cliEvent, normalizeEventAgentIds, notifyEvent } from "./guild-report.mjs";
 import { reporterFallbackCommand, safeNotifyPayload } from "./guild-notify.mjs";
 import { DEFAULT_STORAGE_ROOT, lifecycleStoragePaths } from "./guild-paths.mjs";
-import { AGENT_IDS, isAmbiguousAgentType, resolveAgentRole, roleForAgentType } from "./guild-roles.mjs";
+import { AGENT_IDS, COMPANY_ROLE_ALIASES, COMPANY_ROLE_TITLES, canonicalAgentId, companyTitleForAgent, isAmbiguousAgentType, resolveAgentRole, roleForAgentType } from "./guild-roles.mjs";
 import { ageSeconds, parseLatestHookLog } from "../lib/guild-health.ts";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,6 +54,65 @@ test("lifecycle agent identity handles task-name aliases", () => {
   assert.equal(roleForAgentType("prover_build"), "prover");
   assert.equal(roleForAgentType("technical-research"), "pathfinder");
   assert.equal(roleForAgentType("unclassified-specialist"), "archivist");
+});
+
+test("company titles and task-name slugs normalize to canonical legacy IDs", () => {
+  const companyTitles = {
+    "Business Analyst": "herald",
+    "Program Manager": "guildmaster",
+    "Operations Coordinator": "steward",
+    "Technical Researcher": "pathfinder",
+    "Market Intelligence Analyst": "courier",
+    "Systems Analyst": "archivist",
+    "Change Management Analyst": "genealogist",
+    "Platform Engineer": "hookwright",
+    "Frontend Engineer": "interface-weaver",
+    "Data Engineer": "ledgerkeeper",
+    "QA Engineer": "prover",
+    "Technical Writer": "chronicler",
+    "Strategy Consultant": "counselor",
+    "Compliance Reviewer": "assayer",
+  };
+
+  assert.equal(Object.keys(COMPANY_ROLE_ALIASES).length, AGENT_IDS.length);
+  assert.equal(Object.keys(COMPANY_ROLE_TITLES).length, AGENT_IDS.length);
+  for (const [title, canonicalId] of Object.entries(companyTitles)) {
+    const slug = title.toLowerCase().replace(/\s+/g, "-");
+    const taskName = `/root/${slug.replaceAll("-", "_")}_task`;
+    assert.equal(canonicalAgentId(title), canonicalId, `${title} title`);
+    assert.equal(canonicalAgentId(slug), canonicalId, `${slug} slug`);
+    assert.equal(canonicalAgentId(taskName), canonicalId, `${taskName} task name`);
+    assert.deepEqual(resolveAgentRole(title), { role: canonicalId, matched: true });
+    assert.equal(roleForAgentType(taskName), canonicalId);
+    assert.equal(canonicalAgentId(canonicalId), canonicalId, `${canonicalId} legacy ID`);
+    assert.equal(companyTitleForAgent(canonicalId), title, `${canonicalId} public title`);
+  }
+});
+
+test("reporter normalization keeps company aliases out of stored and API identities", () => {
+  assert.deepEqual(normalizeEventAgentIds({
+    agent: "Frontend Engineer",
+    from: "/root/program_manager_dispatch",
+  }), {
+    agent: "interface-weaver",
+    from: "guildmaster",
+  });
+  assert.deepEqual(normalizeEventAgentIds({ agent: "unknown", from: "unknown" }), {
+    agent: "guildmaster",
+    from: undefined,
+  });
+});
+
+test("manual reporting accepts company titles while emitting canonical IDs", () => {
+  const event = cliEvent([
+    "--agent", "Business Analyst",
+    "--from", "/root/program_manager_dispatch",
+    "--status", "working",
+    "--project", projectRoot,
+  ]);
+  assert.equal(event.agent, "herald");
+  assert.equal(event.from, "guildmaster");
+  assert.equal(event.message, "Business Analyst changed state to working.");
 });
 
 test("Claude Code built-in subagent types get an explicit role, not the archivist fallback by accident", () => {
@@ -124,9 +183,9 @@ test("lifecycle storage paths honor an isolated root and preserve the production
 
 test("hook diagnostics parse the latest valid receipt without throwing", () => {
   const parsed = parseLatestHookLog([
-    JSON.stringify({ at: "2026-08-09T08:00:00.000Z", event: "UserPromptSubmit", stage: "received" }),
+    JSON.stringify({ at: "2026-08-09T08:00:00.000Z", event: "UserPromptSubmit", stage: "received", source: "codex" }),
     "not json",
-    JSON.stringify({ receivedAt: "2026-08-09T08:01:00.000Z", hook_event_name: "SubagentStart", stage: "handled" }),
+    JSON.stringify({ receivedAt: "2026-08-09T08:01:00.000Z", hook_event_name: "SubagentStart", stage: "handled", source: "claude" }),
   ].join("\n"));
 
   assert.deepEqual(parsed, {
@@ -134,17 +193,23 @@ test("hook diagnostics parse the latest valid receipt without throwing", () => {
     receiptAt: "2026-08-09T08:01:00.000Z",
     event: "SubagentStart",
     stage: "handled",
+    source: "claude",
   });
   assert.equal(ageSeconds(parsed.receiptAt, Date.parse("2026-08-09T08:01:05.900Z")), 5);
 });
 
 test("hook diagnostics distinguish empty and malformed logs", () => {
   assert.deepEqual(parseLatestHookLog("\n"), {
-    status: "empty", receiptAt: null, event: null, stage: null,
+    status: "empty", receiptAt: null, event: null, stage: null, source: null,
   });
   assert.deepEqual(parseLatestHookLog("{broken"), {
-    status: "malformed", receiptAt: null, event: null, stage: null,
+    status: "malformed", receiptAt: null, event: null, stage: null, source: null,
   });
+});
+
+test("hook diagnostics preserve backward compatibility and reject untrusted source labels", () => {
+  assert.equal(parseLatestHookLog(JSON.stringify({ at: "2026-08-09T08:00:00.000Z" })).source, null);
+  assert.equal(parseLatestHookLog(JSON.stringify({ at: "2026-08-09T08:00:00.000Z", source: "other" })).source, null);
 });
 
 test("notify fallback uses stable run and event identity", () => {
@@ -157,6 +222,7 @@ test("notify fallback uses stable run and event identity", () => {
   const second = notifyEvent({ ...payload });
   assert.equal(first.runId, "codex-thread-42-turn-7");
   assert.equal(first.eventId, "hook-stop-thread-42-turn-7");
+  assert.equal(first.source, "codex");
   assert.equal(second.runId, first.runId);
   assert.equal(second.eventId, first.eventId);
   assert.equal(first.runComplete, true);

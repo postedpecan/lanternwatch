@@ -11,10 +11,12 @@ import { TopBar } from "@/components/guild/TopBar";
 export function GuildShell({ children }: { children: ReactNode }) {
   return (
     <GuildDataProvider>
-      <main className="shell">
+      <div className="shell">
         <TopBar />
-        {children}
-      </main>
+        <main className="profile-layout">
+          <div className="profile-content">{children}</div>
+        </main>
+      </div>
     </GuildDataProvider>
   );
 }

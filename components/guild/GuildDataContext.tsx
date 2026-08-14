@@ -22,12 +22,14 @@ import {
 } from "@/lib/guild-data";
 import type {
   DashboardPayload,
+  GuildAgentActivity,
   GuildProject,
   GuildRun,
   GuildStorageHealth,
   GuildStatistics,
   StoredGuildEvent,
 } from "@/lib/guild-contract";
+import { DEFAULT_APPEARANCE, applyPalette, loadAppearance } from "@/lib/appearance";
 import { titleCase } from "@/lib/guild-format";
 
 // This provider owns every piece of state that must stay consistent between
@@ -130,8 +132,8 @@ const initialState: GuildState = {
   timelineStatuses: STEPS.map(() => "waiting"),
   timelineTimes: STEPS.map(() => null),
   detail: {
-    title: "Guild at rest",
-    text: "Send a commission to see each agent’s status, runtime, and handoff in real time.",
+    title: "Team at rest",
+    text: "Start a project task to see each role’s status, runtime, and handoff in real time.",
     tag: "Ready",
   },
   logs: [],
@@ -180,8 +182,8 @@ function reducer(state: GuildState, action: Action): GuildState {
         timelineStatuses: STEPS.map(() => "waiting"),
         timelineTimes: STEPS.map(() => null),
         detail: {
-          title: "Herald",
-          text: "The Herald is receiving your commission…",
+          title: "Business Analyst",
+          text: "The Business Analyst is reviewing your project task…",
           tag: "Starting",
         },
       };
@@ -233,10 +235,10 @@ function reducer(state: GuildState, action: Action): GuildState {
         timelineStatuses: STEPS.map(() => "done"),
         detail: {
           title: "Delivery",
-          text: "The final answer has been delivered to the patron.",
+          text: "The final report has been delivered to the requester.",
           tag: "Delivered",
         },
-        logs: addLog(state, "Delivery", "The final answer has been delivered to the patron.", action.elapsed),
+        logs: addLog(state, "Delivery", "The final report has been delivered to the requester.", action.elapsed),
       };
     }
     case "PAUSE":
@@ -348,6 +350,8 @@ type GuildDataContextValue = {
   followLive: () => void;
   currentRun: GuildRun | null;
   currentEvents: StoredGuildEvent[];
+  recentEvents: StoredGuildEvent[];
+  agentActivities: GuildAgentActivity[];
   statistics: GuildStatistics;
   agentRunCounts: Record<AgentId, number>;
   storageConnected: boolean;
@@ -379,6 +383,8 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
   const [selectedRunId, setSelectedRunId] = useState("");
   const [currentRun, setCurrentRun] = useState<GuildRun | null>(null);
   const [currentEvents, setCurrentEvents] = useState<StoredGuildEvent[]>([]);
+  const [recentEvents, setRecentEvents] = useState<StoredGuildEvent[]>([]);
+  const [agentActivities, setAgentActivities] = useState<GuildAgentActivity[]>([]);
   const [statistics, setStatistics] = useState<GuildStatistics>(emptyStatistics);
   const [agentRunCounts, setAgentRunCounts] = useState<Record<AgentId, number>>(
     () => Object.fromEntries(AGENT_IDS.map((agent) => [agent, 0])) as Record<AgentId, number>,
@@ -433,11 +439,13 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
           setSavedRuns(payload.runs);
           setCurrentRun(payload.run);
           setCurrentEvents(payload.events);
+          setRecentEvents(payload.recentEvents);
+          setAgentActivities(payload.agentActivities);
           setStatistics(payload.statistics);
           setAgentRunCounts(payload.agentRunCounts);
           setStorageConnected(true);
-          if (payload.selectedProjectId && payload.selectedProjectId !== selectedProjectId) {
-            setSelectedProjectId(payload.selectedProjectId);
+          if (selectedProjectId && !payload.projects.some((project) => project.id === selectedProjectId)) {
+            setSelectedProjectId("");
           }
           if (selectedRunId && payload.run?.id !== selectedRunId) {
             setSelectedRunId("");
@@ -549,9 +557,16 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
       } catch {
         // The switch still works when browser storage is unavailable.
       }
+      let appearance = DEFAULT_APPEARANCE;
+      try {
+        appearance = loadAppearance(window.localStorage);
+      } catch {
+        // Keep the default palette when device storage access is blocked.
+      }
+      applyPalette(document.documentElement.style, appearance.palettes[nextTheme]);
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute("content", nextTheme === "dark" ? "#171513" : "#f4ead8");
+        ?.setAttribute("content", appearance.palettes[nextTheme].surface);
       return nextTheme;
     });
   }, []);
@@ -574,13 +589,22 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
   const liveStatus = useMemo(() => {
     if (mode === "live" && selectedRunId) return { live: false, text: "Viewing run history" };
     if (mode === "live" && !storageConnected) return { live: false, text: "Storage offline" };
-    if (state.paused) return { live: false, text: "Commission paused" };
-    if (state.running) return { live: true, text: "Commission in progress" };
-    if (state.delivered) return { live: false, text: "Commission delivered" };
-    if (Object.values(state.roomStatuses).includes("interrupted")) return { live: false, text: "Commission interrupted" };
-    if (Object.values(state.roomStatuses).includes("stalled")) return { live: false, text: "Commission may be stalled" };
-    return { live: false, text: "Awaiting a commission" };
-  }, [mode, selectedRunId, state.delivered, state.paused, state.running, storageConnected, state.roomStatuses]);
+    if (mode === "live") {
+      if (agentActivities.length > 0) {
+        return {
+          live: true,
+          text: `${agentActivities.length} active role${agentActivities.length === 1 ? "" : "s"}`,
+        };
+      }
+      return { live: false, text: "No active roles" };
+    }
+    if (state.paused) return { live: false, text: "Project task paused" };
+    if (state.running) return { live: true, text: "Project task in progress" };
+    if (state.delivered) return { live: false, text: "Report delivered" };
+    if (Object.values(state.roomStatuses).includes("interrupted")) return { live: false, text: "Project task interrupted" };
+    if (Object.values(state.roomStatuses).includes("stalled")) return { live: false, text: "Project task may be stalled" };
+    return { live: false, text: "Awaiting a project task" };
+  }, [agentActivities.length, mode, selectedRunId, state.delivered, state.paused, state.running, storageConnected, state.roomStatuses]);
 
   const value: GuildDataContextValue = {
     hydrated,
@@ -598,6 +622,8 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
     followLive,
     currentRun,
     currentEvents,
+    recentEvents,
+    agentActivities,
     statistics,
     agentRunCounts,
     storageConnected,

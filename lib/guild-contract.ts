@@ -1,5 +1,5 @@
 import type { AgentId, RoomStatus } from "@/lib/guild-data";
-import type { HookLogStatus } from "@/lib/guild-health";
+import type { HookLogStatus, HookSource } from "@/lib/guild-health";
 
 export type GuildProject = {
   id: string;
@@ -10,6 +10,7 @@ export type GuildProject = {
 
 export type GuildRun = {
   id: string;
+  sourceRunId: string;
   projectId: string;
   quest: string;
   status: "working" | "complete" | "interrupted" | "stalled";
@@ -34,6 +35,20 @@ export type StoredGuildEvent = {
   agentInstanceId: string | null;
 };
 
+export type GuildAgentActivity = {
+  id: string;
+  agentInstanceId: string;
+  agent: AgentId;
+  projectId: string;
+  projectName: string;
+  runId: string;
+  status: Extract<RoomStatus, "queued" | "working">;
+  message: string;
+  startedAt: string;
+  updatedAt: string;
+  durationSeconds: number;
+};
+
 export type GuildStatistics = {
   totalRuns: number;
   completedRuns: number;
@@ -53,6 +68,8 @@ export type DashboardPayload = {
   run: GuildRun | null;
   runs: GuildRun[];
   events: StoredGuildEvent[];
+  recentEvents: StoredGuildEvent[];
+  agentActivities: GuildAgentActivity[];
   agentRunCounts: Record<AgentId, number>;
   statistics: GuildStatistics;
   serverTime: string;
@@ -77,6 +94,7 @@ export type GuildStorageHealth = {
   lastHookReceiptAgeSeconds: number | null;
   lastHookEvent: string | null;
   lastHookStage: string | null;
+  lastHookSource: HookSource | null;
 };
 
 export type IncomingGuildEvent = {
@@ -93,4 +111,5 @@ export type IncomingGuildEvent = {
   runComplete?: boolean;
   heartbeat?: boolean;
   agentInstanceId?: string;
+  source?: HookSource;
 };

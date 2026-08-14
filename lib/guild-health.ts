@@ -1,10 +1,12 @@
 export type HookLogStatus = "ok" | "missing" | "empty" | "malformed" | "unreadable";
+export type HookSource = "codex" | "claude";
 
 export type ParsedHookLog = {
   status: Exclude<HookLogStatus, "missing" | "unreadable">;
   receiptAt: string | null;
   event: string | null;
   stage: string | null;
+  source: HookSource | null;
 };
 
 function safeText(value: unknown) {
@@ -19,10 +21,14 @@ function safeTimestamp(value: unknown) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
+function safeSource(value: unknown): HookSource | null {
+  return value === "codex" || value === "claude" ? value : null;
+}
+
 export function parseLatestHookLog(raw: string): ParsedHookLog {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length === 0) {
-    return { status: "empty", receiptAt: null, event: null, stage: null };
+    return { status: "empty", receiptAt: null, event: null, stage: null, source: null };
   }
 
   let malformed = false;
@@ -41,7 +47,7 @@ export function parseLatestHookLog(raw: string): ParsedHookLog {
   }
 
   if (!latest) {
-    return { status: "malformed", receiptAt: null, event: null, stage: null };
+    return { status: "malformed", receiptAt: null, event: null, stage: null, source: null };
   }
 
   return {
@@ -49,6 +55,7 @@ export function parseLatestHookLog(raw: string): ParsedHookLog {
     receiptAt: safeTimestamp(latest.receivedAt ?? latest.at ?? latest.timestamp),
     event: safeText(latest.event ?? latest.hook_event_name ?? latest.eventName),
     stage: safeText(latest.stage),
+    source: safeSource(latest.source ?? latest.host),
   };
 }
 

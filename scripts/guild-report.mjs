@@ -4,10 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { lanternwatchRuntimePaths } from "./guild-paths.mjs";
-import { AGENT_ID_SET } from "./guild-roles.mjs";
+import { canonicalAgentId, companyTitleForAgent } from "./guild-roles.mjs";
 
 const DEFAULT_API = "http://127.0.0.1:3000/api/guild/events";
 const STATUSES = new Set(["waiting", "queued", "working", "complete", "interrupted", "stalled"]);
+const SOURCES = new Set(["codex", "claude"]);
 
 function option(args, name) {
   const index = args.indexOf(`--${name}`);
@@ -39,6 +40,7 @@ export function notifyEvent(payload) {
     projectPath,
     projectName: path.basename(projectPath),
     runId: `codex-${threadId}-${turnId}`,
+    source: "codex",
     agent: "guildmaster",
     status: "complete",
     message: "Codex turn completed and returned to idle.",
@@ -48,9 +50,11 @@ export function notifyEvent(payload) {
   };
 }
 
-function cliEvent(args) {
+export function cliEvent(args) {
   const projectPath = path.resolve(clean(option(args, "project"), process.cwd()));
-  const agentCandidate = clean(option(args, "agent"), "guildmaster").toLowerCase();
+  const agentCandidate = clean(option(args, "agent"), "guildmaster");
+  const agent = canonicalAgentId(agentCandidate) || "guildmaster";
+  const from = canonicalAgentId(option(args, "from"));
   const statusCandidate = clean(option(args, "status"), "working").toLowerCase();
   const runId = clean(option(args, "run-id"), `manual-${createHash("sha1").update(projectPath).digest("hex").slice(0, 10)}`);
   return {
@@ -58,13 +62,25 @@ function cliEvent(args) {
     projectPath,
     projectName: clean(option(args, "project-name"), path.basename(projectPath), 120),
     runId,
-    agent: AGENT_ID_SET.has(agentCandidate) ? agentCandidate : "guildmaster",
+    source: SOURCES.has(String(option(args, "source") || "").toLowerCase())
+      ? String(option(args, "source")).toLowerCase()
+      : undefined,
+    agent,
     status: STATUSES.has(statusCandidate) ? statusCandidate : "working",
-    message: clean(option(args, "message"), `${agentCandidate} changed state to ${statusCandidate}.`),
+    message: clean(option(args, "message"), `${companyTitleForAgent(agent)} changed state to ${statusCandidate}.`),
     quest: clean(option(args, "quest"), "Codex workspace activity"),
-    from: option(args, "from"),
+    from,
+    agentInstanceId: option(args, "agent-instance-id"),
     occurredAt: new Date().toISOString(),
     runComplete: args.includes("--run-complete"),
+  };
+}
+
+export function normalizeEventAgentIds(event) {
+  return {
+    ...event,
+    agent: canonicalAgentId(event?.agent) || "guildmaster",
+    from: canonicalAgentId(event?.from),
   };
 }
 
@@ -87,11 +103,33 @@ function ensureSchema(database) {
   if (!columns.some((column) => column.name === "outcome")) {
     database.exec("ALTER TABLE runs ADD COLUMN outcome TEXT");
   }
+  if (!columns.some((column) => column.name === "source_run_id")) {
+    database.exec("ALTER TABLE runs ADD COLUMN source_run_id TEXT");
+  }
   const eventColumns = database.prepare("PRAGMA table_info(events)").all();
   if (!eventColumns.some((column) => column.name === "agent_instance_id")) {
     database.exec("ALTER TABLE events ADD COLUMN agent_instance_id TEXT");
   }
-  database.exec("UPDATE runs SET completed_at = (SELECT MIN(occurred_at) FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')) WHERE status = 'complete' AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted'))");
+  if (!eventColumns.some((column) => column.name === "source_event_id")) {
+    database.exec("ALTER TABLE events ADD COLUMN source_event_id TEXT");
+  }
+  database.exec(`
+    UPDATE runs SET source_run_id = id WHERE source_run_id IS NULL OR source_run_id = '';
+    UPDATE events SET source_event_id = event_id WHERE source_event_id IS NULL OR source_event_id = '';
+    CREATE UNIQUE INDEX IF NOT EXISTS runs_project_source_id ON runs(project_id, source_run_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS events_project_source_id ON events(project_id, source_event_id);
+    UPDATE runs SET completed_at = (SELECT MIN(occurred_at) FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')) WHERE status = 'complete' AND EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted'));
+  `);
+}
+
+function scopedStorageId(kind, projectId, sourceId) {
+  const digest = createHash("sha256").update(`${projectId}\0${sourceId}`).digest("hex").slice(0, 32);
+  return `${kind}:${projectId}:${digest}`;
+}
+
+function resolveRunStorageId(database, projectId, sourceRunId) {
+  return database.prepare("SELECT id FROM runs WHERE project_id = ? AND source_run_id = ?").get(projectId, sourceRunId)?.id
+    || scopedStorageId("run", projectId, sourceRunId);
 }
 
 function logReporter(stage, error, event) {
@@ -102,17 +140,18 @@ function logReporter(stage, error, event) {
       at: new Date().toISOString(), stage, name: error?.name || "Error",
       message: String(error?.message || error).slice(0, 500),
       eventId: event?.eventId, runId: event?.runId,
+      source: SOURCES.has(event?.source) ? event.source : undefined,
     })}\n`, "utf8");
   } catch {}
 }
 
-function exportMarkdown(database, event) {
+function exportMarkdown(database, event, projectId, runId) {
   const targetVault = vaultPath();
   if (!targetVault) return;
   const directory = path.join(targetVault, "Guild Activity");
   mkdirSync(directory, { recursive: true });
-  const rows = database.prepare("SELECT agent, status, message, occurred_at FROM events WHERE run_id = ? ORDER BY occurred_at, id").all(event.runId);
-  const fileName = `${event.occurredAt.slice(0, 10)}-${event.runId.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 64)}.md`;
+  const rows = database.prepare("SELECT agent, status, message, occurred_at FROM events WHERE run_id = ? AND project_id = ? ORDER BY occurred_at, id").all(runId, projectId);
+  const fileName = `${event.occurredAt.slice(0, 10)}-${`${projectId}-${event.runId}`.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 64)}.md`;
   const lines = [
     "---",
     `project: ${JSON.stringify(event.projectName)}`,
@@ -129,44 +168,47 @@ function exportMarkdown(database, event) {
     "",
     "## Activity",
     "",
-    ...rows.map((row) => `- ${row.occurred_at} — **${row.agent}** · ${row.status}: ${row.message}`),
+    ...rows.map((row) => `- ${row.occurred_at} — **${companyTitleForAgent(row.agent) || row.agent}** · ${row.status}: ${row.message}`),
     "",
   ];
   writeFileSync(path.join(directory, fileName), lines.join("\n"), "utf8");
 }
 
-function writeDirect(event) {
+export function writeDirect(event) {
+  event = normalizeEventAgentIds(event);
   const target = databasePath();
   mkdirSync(path.dirname(target), { recursive: true });
   const database = new DatabaseSync(target);
   ensureSchema(database);
   const receivedAt = new Date().toISOString();
   const projectId = createHash("sha256").update(event.projectPath.toLocaleLowerCase()).digest("hex").slice(0, 20);
+  const runId = resolveRunStorageId(database, projectId, event.runId);
   if (event.heartbeat === true) {
-    database.prepare("UPDATE runs SET updated_at = ? WHERE id = ? AND project_id = ? AND status = 'working'").run(new Date().toISOString(), event.runId, projectId);
+    database.prepare("UPDATE runs SET updated_at = ? WHERE id = ? AND project_id = ? AND status = 'working'").run(new Date().toISOString(), runId, projectId);
     database.close();
     return;
   }
-  const duplicate = database.prepare("SELECT 1 FROM events WHERE event_id = ?").get(event.eventId);
+  const duplicate = database.prepare("SELECT 1 FROM events WHERE project_id = ? AND source_event_id = ?").get(projectId, event.eventId);
   if (duplicate) { database.close(); return; }
   const terminal = event.runComplete || event.status === "interrupted";
   const outcome = event.status === "interrupted" ? "interrupted" : terminal ? "complete" : null;
   database.exec("BEGIN IMMEDIATE");
   try {
     database.prepare("INSERT INTO projects (id, name, path, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, path = excluded.path, last_seen_at = excluded.last_seen_at").run(projectId, event.projectName, event.projectPath, receivedAt);
-    database.prepare("INSERT INTO runs (id, project_id, quest, status, started_at, completed_at, updated_at, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quest = CASE WHEN excluded.quest <> '' THEN excluded.quest ELSE runs.quest END, status = CASE WHEN excluded.status = 'complete' THEN 'complete' ELSE runs.status END, completed_at = COALESCE(runs.completed_at, excluded.completed_at), updated_at = excluded.updated_at, outcome = COALESCE(excluded.outcome, runs.outcome)").run(event.runId, projectId, event.quest, terminal ? "complete" : "working", event.occurredAt, terminal ? event.occurredAt : null, receivedAt, outcome);
-    database.prepare("INSERT OR IGNORE INTO events (event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(event.eventId, projectId, event.runId, event.agent, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
+    database.prepare("INSERT INTO runs (id, project_id, source_run_id, quest, status, started_at, completed_at, updated_at, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quest = CASE WHEN excluded.quest <> '' THEN excluded.quest ELSE runs.quest END, status = CASE WHEN excluded.status = 'complete' THEN 'complete' ELSE runs.status END, completed_at = COALESCE(runs.completed_at, excluded.completed_at), updated_at = excluded.updated_at, outcome = COALESCE(excluded.outcome, runs.outcome)").run(runId, projectId, event.runId, event.quest, terminal ? "complete" : "working", event.occurredAt, terminal ? event.occurredAt : null, receivedAt, outcome);
+    database.prepare("INSERT OR IGNORE INTO events (event_id, source_event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(scopedStorageId("event", projectId, event.eventId), event.eventId, projectId, runId, event.agent, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
     database.close();
     throw error;
   }
-  if (terminal) exportMarkdown(database, event);
+  if (terminal) exportMarkdown(database, event, projectId, runId);
   database.close();
 }
 
 export async function reportEvent(event) {
+  event = normalizeEventAgentIds(event);
   let apiError;
   for (const delay of [0, 120, 300]) {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));

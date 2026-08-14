@@ -101,10 +101,37 @@ application to export completed runs as Markdown.
 | `LANTERNWATCH_STALE_AFTER_SECONDS` | Idle time before an open run appears stalled; default `600` |
 | `LANTERNWATCH_API_URL` | Reporter ingestion endpoint; defaults to the loopback API |
 | `LANTERNWATCH_CONFIG_PATH` | Optional shared runtime configuration file |
+| `LANTERNWATCH_RESEARCH_DB_PATH` | Technical Researcher/Market Intelligence Analyst research database; defaults to `<project>/.lanternwatch/research.db` |
+| `LANTERNWATCH_RESEARCH_VAULT_PATH` | Research-note destination; defaults to `D:\VibeCoding\Vibe Coding\Wiki\Lanternwatch` |
 
 The installers persist resolved paths to `~/.lanternwatch/config.json` so
 background reporters and the dashboard can share the same locations.
 Environment variables take precedence over that file.
+
+## Research archive
+
+Every terminal Technical Researcher or Market Intelligence Analyst investigation produces one structured
+public-source record. The main agent passes that JSON package to:
+
+```powershell
+npm run research:capture -- --file .\path\to\research-result.json
+```
+
+SQLite is authoritative. A capture is inserted once by stable task ID, marked
+`pending`, and then exported as a deterministic dated Markdown note. Export
+failures leave a retryable `failed` row and print a sanitized warning without
+discarding the research. The next capture retries all pending/failed notes;
+manual retry is also available:
+
+```powershell
+npm run research:retry
+```
+
+Only public HTTP(S) sources are accepted. Notes contain YAML metadata, the
+research question, executive summary, verified findings, caveats, source
+links, and short supporting excerpts. Existing vault notes are never indexed
+or backfilled, and complete webpages, raw prompts, private conversation,
+credentials, commands, local paths, and reasoning traces are not stored.
 
 ## Connect lifecycle events
 
@@ -169,6 +196,8 @@ demo helpers. They update client state but do not persist events.
 | `npm run guild:report` | Submit a manual lifecycle event |
 | `npm run guild:simulate` | Simulate lifecycle activity locally |
 | `npm run guild:rehook` | Reinstall Codex hooks and reset trust records |
+| `npm run research:capture -- --file <json>` | Persist and export one research result |
+| `npm run research:retry` | Retry pending or failed research-note exports |
 | `npm run build:sprites` | Rebuild optional sprite assets |
 
 ## Security model

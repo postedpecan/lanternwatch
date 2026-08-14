@@ -6,6 +6,7 @@ const health = (hookLogStatus, overrides = {}) => ({
   hookLogPath: String.raw`C:\LanternwatchTest\logs\hook.jsonl`,
   hookLogStatus,
   lastHookReceiptAgeSeconds: null,
+  lastHookSource: null,
   ...overrides,
 });
 
@@ -15,7 +16,7 @@ test("missing and empty hook logs explain that no receipt was observed", () => {
   for (const status of ["missing", "empty"]) {
     const diagnostic = describeHookDiagnostic(true, health(status), formatAge);
     assert.match(diagnostic.warning, /No lifecycle receipt has been observed/);
-    assert.match(diagnostic.warning, /Fully exit Codex and start a fresh chat/);
+    assert.match(diagnostic.warning, /Fully exit Codex or Claude Code and start a fresh chat/);
     assert.match(diagnostic.warning, /run \/hooks inside the Codex CLI/);
   }
 });
@@ -44,6 +45,19 @@ test("healthy hook data has no warning", () => {
     ),
     { label: "Hook received 8s ago", warning: null },
   );
+});
+
+test("healthy hook data identifies Codex and Claude Code receipts", () => {
+  assert.equal(describeHookDiagnostic(
+    true,
+    health("ok", { lastHookReceiptAgeSeconds: 8, lastHookSource: "codex" }),
+    formatAge,
+  ).label, "Codex hook received 8s ago");
+  assert.equal(describeHookDiagnostic(
+    true,
+    health("ok", { lastHookReceiptAgeSeconds: 9, lastHookSource: "claude" }),
+    formatAge,
+  ).label, "Claude Code hook received 9s ago");
 });
 
 test("a disconnected health API keeps its distinct diagnostic", () => {
