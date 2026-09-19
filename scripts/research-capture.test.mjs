@@ -17,6 +17,7 @@ import {
   captureResearch,
   normalizeResearchRecord,
   researchCapturePaths,
+  retryResearchExports,
 } from "./research-capture.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,7 +32,7 @@ function fixture(name) {
 function payload(overrides = {}) {
   return {
     taskId: "pathfinder-docs-001",
-    role: "pathfinder",
+    role: "technical-researcher",
     topic: "Node SQLite documentation",
     question: "What transaction support is documented?",
     status: "complete",
@@ -142,6 +143,7 @@ test("clean database capture persists once and exports the complete Markdown con
 
   const records = rows(location.databasePath, "SELECT * FROM research_records");
   assert.equal(records.length, 1);
+  assert.equal(records[0].role, "technical-researcher");
   assert.equal(records[0].export_status, "exported");
   assert.equal(rows(location.databasePath, "SELECT * FROM research_sources").length, 1);
   assert.equal(rows(location.databasePath, "SELECT * FROM research_schema_migrations").length, 1);
@@ -149,6 +151,7 @@ test("clean database capture persists once and exports the complete Markdown con
   const note = readFileSync(path.join(location.vaultPath, records[0].note_filename), "utf8");
   assert.match(note, /^---\nlanternwatch: research/mu);
   assert.match(note, /status: "complete"/u);
+  assert.match(note, /role: "technical-researcher"/u);
   assert.match(note, /## Research question/u);
   assert.match(note, /## Executive summary/u);
   assert.match(note, /## Verified findings/u);
@@ -170,6 +173,72 @@ test("migration is additive and repeatable for an existing unrelated database", 
   assert.equal(rows(location.databasePath, "SELECT value FROM existing_history")[0].value, "preserved");
   assert.equal(rows(location.databasePath, "SELECT * FROM research_schema_migrations").length, 1);
   assert.equal(rows(location.databasePath, "SELECT * FROM research_records").length, 2);
+});
+
+test("legacy CHECK-constrained research rows migrate repeatably without losing records, sources, or export metadata", () => {
+  const location = paths("legacy-role-migration");
+  mkdirSync(path.dirname(location.databasePath), { recursive: true });
+  const database = new DatabaseSync(location.databasePath);
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE research_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+    INSERT INTO research_schema_migrations VALUES (1, '2026-08-01T00:00:00.000Z');
+    CREATE TABLE research_records (
+      id INTEGER PRIMARY KEY,
+      task_id TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL CHECK (role IN ('pathfinder', 'courier')),
+      topic TEXT NOT NULL,
+      question TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete')),
+      summary TEXT NOT NULL,
+      findings_json TEXT NOT NULL,
+      caveats_json TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      note_filename TEXT NOT NULL UNIQUE,
+      export_status TEXT NOT NULL DEFAULT 'pending' CHECK (export_status IN ('pending', 'exported', 'failed')),
+      export_error TEXT,
+      exported_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE research_sources (
+      id INTEGER PRIMARY KEY,
+      research_id INTEGER NOT NULL REFERENCES research_records(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      publisher TEXT NOT NULL DEFAULT '',
+      published_at TEXT,
+      accessed_at TEXT,
+      excerpt TEXT NOT NULL DEFAULT '',
+      UNIQUE (research_id, url)
+    );
+    INSERT INTO research_records VALUES
+      (41, 'legacy-pathfinder', 'pathfinder', 'Legacy technical', 'Question A', 'complete', 'Summary A', '[]', '[]', NULL, '2026-08-01T01:00:00.000Z', '2026-08-01T01:01:00.000Z', 'legacy-technical.md', 'pending', NULL, NULL, '2026-08-01T01:01:00.000Z', '2026-08-01T01:01:00.000Z'),
+      (42, 'legacy-courier', 'courier', 'Legacy market', 'Question B', 'incomplete', 'Summary B', '[]', '["Awaiting confirmation"]', NULL, '2026-08-01T02:00:00.000Z', '2026-08-01T02:01:00.000Z', 'legacy-market.md', 'failed', 'Error:EACCES: Obsidian note export failed', NULL, '2026-08-01T02:01:00.000Z', '2026-08-01T02:01:00.000Z');
+    INSERT INTO research_sources VALUES
+      (71, 41, 'https://nodejs.org/api/sqlite.html', 'SQLite', 'Node.js', NULL, NULL, 'Technical source'),
+      (72, 42, 'https://example.com/market', 'Market', 'Example', NULL, NULL, 'Market source');
+  `);
+  database.close();
+
+  const first = retryResearchExports(location);
+  const second = retryResearchExports(location);
+  assert.deepEqual(first.map((result) => result.status), ["exported", "exported"]);
+  assert.deepEqual(second, []);
+  const records = rows(location.databasePath, "SELECT id, task_id, role, note_filename, export_status FROM research_records ORDER BY id");
+  assert.deepEqual(records.map((record) => ({ ...record })), [
+    { id: 41, task_id: "legacy-pathfinder", role: "technical-researcher", note_filename: "legacy-technical.md", export_status: "exported" },
+    { id: 42, task_id: "legacy-courier", role: "market-intelligence-analyst", note_filename: "legacy-market.md", export_status: "exported" },
+  ]);
+  assert.deepEqual(rows(location.databasePath, "SELECT id, research_id FROM research_sources ORDER BY id").map((row) => ({ ...row })), [
+    { id: 71, research_id: 41 },
+    { id: 72, research_id: 42 },
+  ]);
+  assert.deepEqual(rows(location.databasePath, "SELECT version FROM research_schema_migrations ORDER BY version").map((row) => row.version), [1, 2]);
+  assert.match(readFileSync(path.join(location.vaultPath, "legacy-technical.md"), "utf8"), /role: "technical-researcher"/u);
+  assert.match(readFileSync(path.join(location.vaultPath, "legacy-market.md"), "utf8"), /role: "market-intelligence-analyst"/u);
 });
 
 test("duplicate task IDs are harmless and never overwrite the first authoritative record", () => {
@@ -203,6 +272,7 @@ test("incomplete research is persisted and exported with a visible warning", () 
   }), location);
   const record = rows(location.databasePath, "SELECT * FROM research_records")[0];
   const note = readFileSync(path.join(location.vaultPath, record.note_filename), "utf8");
+  assert.equal(record.role, "market-intelligence-analyst", "legacy courier input is canonicalized before persistence");
   assert.equal(record.status, "incomplete");
   assert.match(note, /\[!warning\] Incomplete research/u);
   assert.match(note, /No public sources were available/u);

@@ -133,6 +133,26 @@ links, and short supporting excerpts. Existing vault notes are never indexed
 or backfilled, and complete webpages, raw prompts, private conversation,
 credentials, commands, local paths, and reasoning traces are not stored.
 
+## Your Codex agents
+
+LanternWatch does not install or take ownership of Codex agents. The Agents
+page separates global and workspace definitions, registered external TOMLs,
+and this project's LanternWatch definitions. LanternWatch definitions are
+visible with a `LanternWatch` tag but read-only. You can create, rename, tag,
+or temporarily disable your own global and workspace agents.
+
+Discovery is manual by default: the catalog changes only after **Refresh
+agents** or another direct catalog action. In Settings, **Automatic - scan once
+now** performs one immediate scan when saved; it does not watch folders, poll,
+or scan in the background. You can also register any readable local TOML. An
+external TOML is tracked only until you choose **Add to Codex**, which copies it
+to a global or workspace Codex folder without changing the original file.
+Restart Codex after changing an agent file so the host can discover the new
+definition.
+The current project's `AGENTS.md` remains applicable, and project agents with
+matching names take precedence over personal agents. See the official
+[Codex custom-agent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
 ## Connect lifecycle events
 
 These commands modify global agent configuration. Each installer creates
@@ -146,10 +166,83 @@ npm run guild:install
 ```
 
 The installer resolves `CODEX_HOME` or defaults to `~/.codex`, finds Node on
-`PATH`, merges lifecycle hooks, and chains any existing Codex completion
-notifier. After installation, start the Codex CLI in this project and use
+`PATH`, reads Lanternwatch path overrides from the process environment or
+`.env.local`, merges lifecycle hooks, and leaves existing Codex notifier
+configuration unchanged. After installation, start the Codex CLI in this project and use
 `/hooks` to review and trust the definitions. Restart desktop or IDE hosts so
 they reload the global configuration.
+
+If the dashboard and background hooks were installed at different times or
+show different storage roots, repair only their shared runtime paths without
+resetting hook trust or notifier configuration:
+
+```powershell
+npm run guild:repair-runtime
+```
+
+Older Lanternwatch releases used Codex's completion-only `notify` setting as a
+fallback. It cannot report live subagents and newer payloads can exceed the
+Windows command-line limit. Remove only that legacy Lanternwatch layer while
+preserving any surrounding notifier:
+
+```powershell
+npm run guild:repair-notifier
+```
+
+For one guarded recovery workflow, run the command with no flags first. This
+is a non-mutating preflight: it resolves and prints one shared storage,
+database, vault, and runtime-config tuple but does not run repair scripts,
+change global configuration, stop processes, or delete Lanternwatch data.
+
+```powershell
+npm run guild:recover
+```
+
+After saving all work, the real workflow requires both confirmation guards. It
+repairs runtime paths, Codex hooks, and the obsolete Lanternwatch notifier layer
+before invoking the exact-process restart helper for ChatGPT and Codex only.
+It neither edits Claude Code hooks nor stops or restarts Claude. Existing
+installer backups and rollback behavior remain in effect; databases, logs,
+sessions, backups, vault files, and unrelated hook/notifier configuration are
+preserved. Add `-RestartDashboard` only when the identified local development
+dashboard should also restart.
+
+```powershell
+npm run guild:recover -- -Force -Confirm -RestartDashboard
+```
+
+Forced host termination can lose unsaved chats and work. The command never
+automates keyboard input or trust decisions. After it finishes, reopen Codex,
+run `/hooks` in the Codex CLI, trust and enable all five Lanternwatch handlers,
+fully restart Codex after trust, and send a prompt in a fresh chat. Start a new
+`logs\hook.jsonl` entry under the printed storage root is runtime proof;
+configuration presence alone is not.
+
+### Restart desktop hosts after hook changes
+
+The safe default is a preview: it only lists the exact ChatGPT, Codex, and
+Claude process names it would target, records any readable executable paths,
+and does not stop or launch anything.
+
+```powershell
+npm run guild:restart-hosts -- -WhatIf
+```
+
+For a real restart, run this from a normal PowerShell window rather than a
+Codex or Claude terminal. It force-closes only the allowed host processes,
+relaunches only executable paths it recorded before stopping them, optionally
+restarts an identified local-project Next development server, and opens a new
+PowerShell in this project running `codex`. **Forced termination loses unsaved
+chats and work, including unrelated chats.** The `-Confirm` prompt is required;
+once the new CLI is ready, enter `/hooks` yourself.
+
+```powershell
+npm run guild:restart-hosts -- -Force -Confirm -RestartDashboard
+```
+
+If a host executable path or a local Next development process cannot be safely
+identified, the helper warns and leaves that component alone. It never kills
+generic `node`, `npm`, or wildcard process groups.
 
 Custom locations can be passed directly:
 
@@ -171,9 +264,12 @@ files before editing. Start a new Claude Code session afterward.
 
 ### Manual reporting
 
+Use the company-title slug as the agent ID. Legacy fantasy IDs are still
+accepted as input aliases and are normalized before an event is sent or stored.
+
 ```powershell
-npm run guild:report -- --status working --agent archivist --run-id example-run --project "C:\path\to\project" --message "Inspecting the project"
-npm run guild:report -- --status complete --agent archivist --run-id example-run --project "C:\path\to\project" --message "Inspection complete" --run-complete
+npm run guild:report -- --status working --agent systems-analyst --run-id example-run --project "C:\path\to\project" --message "Inspecting the project"
+npm run guild:report -- --status complete --agent systems-analyst --run-id example-run --project "C:\path\to\project" --message "Inspection complete" --run-complete
 ```
 
 Persisted integrations can also send events to:
@@ -196,6 +292,12 @@ demo helpers. They update client state but do not persist events.
 | `npm run guild:report` | Submit a manual lifecycle event |
 | `npm run guild:simulate` | Simulate lifecycle activity locally |
 | `npm run guild:rehook` | Reinstall Codex hooks and reset trust records |
+| `npm run guild:repair-runtime` | Align background hooks with the dashboard runtime paths |
+| `npm run guild:repair-notifier` | Remove only the obsolete Lanternwatch completion notifier |
+| `npm run guild:recover` | Preview the guarded all-in-one lifecycle recovery without changing anything |
+| `npm run guild:recover -- -Force -Confirm -RestartDashboard` | Repair lifecycle configuration, then force-restart exact guarded hosts; loses unsaved work |
+| `npm run guild:restart-hosts -- -WhatIf` | Preview a guarded desktop-host restart |
+| `npm run guild:restart-hosts -- -Force -Confirm -RestartDashboard` | Force-restart host apps and an identified local dev server; loses unsaved work |
 | `npm run research:capture -- --file <json>` | Persist and export one research result |
 | `npm run research:retry` | Retry pending or failed research-note exports |
 | `npm run build:sprites` | Rebuild optional sprite assets |

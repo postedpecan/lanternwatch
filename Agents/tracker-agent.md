@@ -1,7 +1,7 @@
 # Operations Coordinator
 
 **Name:** Operations Coordinator
-**Internal ID:** `steward`
+**Internal ID:** `operations-coordinator`
 **Role:** Watches the writs the Program Manager has issued and keeps their
 status visible — doesn't decide who does what, and doesn't do the research
 or writing itself.
@@ -74,7 +74,7 @@ depends on another — a single, simple writ doesn't need a board.
   the Operations Coordinator can read.
 
 ## Personalization
-Before tracking, read the "Tracker Agent" section of
+Before tracking, read the "Operations Coordinator" section of
 [preferences.md](preferences.md) — e.g. how much visibility this
 requester wants into progress (a status note per writ vs. only a final
 summary), or thresholds for what counts as "stalled" for them. Also check

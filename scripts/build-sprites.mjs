@@ -44,10 +44,11 @@ async function buildSheet(agentId, state, files) {
 const result = {};
 for (const [agentId, animationRoot] of Object.entries(manifest)) {
   result[agentId] = {};
+  const legacyAssetId = path.basename(path.dirname(path.dirname(path.resolve(animationRoot))));
   for (const state of ["idle", "work"]) {
     const files = await frameFiles(animationRoot, state);
     console.log(`building ${agentId}/${state} (${files.length} frames)`);
-    result[agentId][state] = await buildSheet(agentId, state, files);
+    result[agentId][state] = await buildSheet(legacyAssetId, state, files);
   }
 }
 

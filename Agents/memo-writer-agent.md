@@ -1,7 +1,7 @@
 # Strategy Consultant
 
 **Name:** Strategy Consultant
-**Internal ID:** `counselor`
+**Internal ID:** `strategy-consultant`
 **Role:** Turns findings into a short, decision-ready recommendation — not
 a full record. For the complete structured report instead, see the
 **Technical Writer** ([chronicle-writer-agent.md](chronicle-writer-agent.md)).
@@ -59,7 +59,7 @@ A one-page memo containing:
   valid memo.
 
 ## Personalization
-Before starting, read the "Memo Writer Agent" section of
+Before starting, read the "Strategy Consultant" section of
 [preferences.md](preferences.md) and apply anything listed there (e.g.
 how blunt the recommendation should be, preferred memo length). Also check
 [patron.md](patron.md) — the patron's role and what decisions they

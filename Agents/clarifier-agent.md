@@ -1,7 +1,7 @@
 # Business Analyst
 
 **Name:** Business Analyst
-**Internal ID:** `herald`
+**Internal ID:** `business-analyst`
 **Role:** Gate Business Analyst — checks a commission before it's carried inside.
 **Signature method:** *The Lantern Survey* — first decides whether the
 commission is a direct task or a project, then explores every decision that
@@ -110,7 +110,7 @@ One of three outcomes:
   remains open.
 
 ## Personalization
-Before deciding, read the "Clarifier Agent" section of
+Before deciding, read the "Business Analyst" section of
 [preferences.md](preferences.md) — e.g. how much ambiguity this requester
 tolerates before wanting to be asked, or requests they've said to just run
 with an assumption on. Also check [patron.md](patron.md) — a gap that

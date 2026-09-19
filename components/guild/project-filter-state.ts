@@ -7,13 +7,14 @@ export type ProjectFilterState = {
 };
 
 export function getProjectFilterState(
+  hydrated: boolean,
   mode: ProjectFilterMode,
   projectCount: number,
 ): ProjectFilterState {
   const demo = mode === "demo";
 
   return {
-    disabled: demo || projectCount === 0,
+    disabled: !hydrated || demo || projectCount === 0,
     descriptionId: demo ? "demoScopeNote" : undefined,
     showDemoNote: demo,
   };

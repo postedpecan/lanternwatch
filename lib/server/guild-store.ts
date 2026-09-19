@@ -5,9 +5,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { AGENT_IDS, type AgentId, type RoomStatus } from "@/lib/guild-data";
+import { LEGACY_AGENT_IDS, canonicalAgentId, type RoomStatus } from "@/lib/guild-data";
 import { ageSeconds, parseLatestHookLog, type HookLogStatus, type HookSource } from "@/lib/guild-health";
+import { ensureCatalogSchema, getCatalog } from "@/lib/server/agent-catalog";
 import type {
+  AgentMetric,
+  AgentPresentation,
+  CatalogAgent,
   DashboardPayload,
   GuildAgentActivity,
   GuildStorageHealth,
@@ -21,7 +25,7 @@ import type {
 const DEFAULT_STORAGE_ROOT = path.join(homedir(), ".lanternwatch");
 const roomStatuses = new Set<RoomStatus>(["waiting", "queued", "working", "complete", "interrupted", "stalled"]);
 const STALE_AFTER_SECONDS = Number(process.env.LANTERNWATCH_STALE_AFTER_SECONDS || 600);
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 type DatabaseState = {
   database: DatabaseSync;
@@ -59,13 +63,17 @@ function runtimeConfiguration(): RuntimeConfiguration {
 function runtimePaths() {
   const configuration = runtimeConfiguration();
   const environmentStorageRoot = configuredPath(process.env.LANTERNWATCH_STORAGE_ROOT);
-  const explicitDatabasePath = configuredPath(process.env.LANTERNWATCH_DB_PATH)
-    || (environmentStorageRoot ? undefined : configuredPath(configuration.databasePath));
+  const environmentDatabasePath = configuredPath(process.env.LANTERNWATCH_DB_PATH);
+  const configuredDatabasePath = configuredPath(configuration.databasePath);
   const storageRoot = environmentStorageRoot
+    || (environmentDatabasePath ? path.dirname(environmentDatabasePath) : undefined)
     || configuredPath(configuration.storageRoot)
-    || (explicitDatabasePath ? path.dirname(explicitDatabasePath) : DEFAULT_STORAGE_ROOT);
+    || (configuredDatabasePath ? path.dirname(configuredDatabasePath) : DEFAULT_STORAGE_ROOT);
   return {
-    databasePath: explicitDatabasePath || path.join(storageRoot, "guild.db"),
+    databasePath: environmentDatabasePath
+      || (environmentStorageRoot ? path.join(environmentStorageRoot, "guild.db") : undefined)
+      || configuredDatabasePath
+      || path.join(storageRoot, "guild.db"),
     storageRoot,
     vaultPath: configuredPath(process.env.LANTERNWATCH_VAULT_PATH)
       || configuredPath(configuration.vaultPath)
@@ -83,6 +91,25 @@ function vaultPath() {
 
 function storageRootPath() {
   return runtimePaths().storageRoot;
+}
+
+function logStoreFailure(stage: string, error: unknown, eventId: string, runId: string) {
+  try {
+    const directory = path.join(storageRootPath(), "logs");
+    mkdirSync(directory, { recursive: true });
+    const candidate = error && typeof error === "object" ? error as { name?: unknown; code?: unknown } : {};
+    const safe = (value: unknown, fallback: string) => typeof value === "string" && value.trim()
+      ? value.trim().replace(/[^a-zA-Z0-9._:-]/g, "-").slice(0, 80)
+      : fallback;
+    writeFileSync(path.join(directory, "server.jsonl"), `${JSON.stringify({
+      at: new Date().toISOString(),
+      stage,
+      name: safe(candidate.name, "Error"),
+      code: safe(candidate.code, "unknown"),
+      eventId: safe(eventId, "event"),
+      runId: safe(runId, "run"),
+    })}\n`, { encoding: "utf8", flag: "a" });
+  } catch {}
 }
 
 function readHookDiagnostics(target: string): {
@@ -164,6 +191,20 @@ function ensureSchema(database: DatabaseSync) {
           WHERE events.run_id = runs.id AND events.status IN ('complete', 'interrupted')
         );
   `);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const migrateAgent = database.prepare("UPDATE events SET agent = ? WHERE agent = ?");
+    const migrateFromAgent = database.prepare("UPDATE events SET from_agent = ? WHERE from_agent = ?");
+    for (const [legacyId, canonicalId] of Object.entries(LEGACY_AGENT_IDS)) {
+      migrateAgent.run(canonicalId, legacyId);
+      migrateFromAgent.run(canonicalId, legacyId);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  ensureCatalogSchema(database);
 }
 
 function getDatabase() {
@@ -214,10 +255,10 @@ function resolveRunStorageId(database: DatabaseSync, projectId: string, sourceRu
   return row?.id ?? scopedStorageId("run", projectId, sourceRunId);
 }
 
-function safeAgent(value: unknown): AgentId {
-  return typeof value === "string" && AGENT_IDS.includes(value as AgentId)
-    ? (value as AgentId)
-    : "guildmaster";
+function safeAgent(value: unknown): string {
+  const canonical = canonicalAgentId(value);
+  if (canonical) return canonical;
+  return cleanText(value, "unknown-agent", 96).replace(/[^a-zA-Z0-9._:-]/g, "-");
 }
 
 function safeStatus(value: unknown): RoomStatus {
@@ -373,35 +414,112 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
   }
 
   const inserted = Number(result.changes) > 0;
-  if (runComplete && inserted) exportRun(database, runId);
+  if (runComplete && inserted) {
+    try {
+      exportRun(database, runId);
+    } catch (exportError) {
+      // The SQLite transaction is authoritative. Optional Markdown export is
+      // best-effort and must never make the ingestion API return a false 400
+      // after the lifecycle event has already committed.
+      logStoreFailure("export-failed", exportError, eventId, sourceRunId);
+    }
+  }
   return { eventId, projectId, runId, inserted };
 }
 
 export function getDashboard(projectId?: string | null, requestedRunId?: string | null): DashboardPayload {
   const database = getDatabase();
-  const agentRunCounts = Object.fromEntries(AGENT_IDS.map((agent) => [agent, 0])) as Record<AgentId, number>;
+  const agentRunCounts: Record<string, number> = {};
+  const agentMetrics: Record<string, AgentMetric> = {};
   const projectRows = database.prepare("SELECT * FROM projects ORDER BY last_seen_at DESC").all() as Record<string, unknown>[];
   const projects = projectRows.map(rowToProject);
   // Missing, empty, and unknown project IDs deliberately mean the global scope.
   // This keeps stale bookmarks non-breaking while making project selection optional.
   const selectedProjectId = projectId && projects.some((project) => project.id === projectId) ? projectId : null;
-  const countRows = selectedProjectId ? database.prepare(`
-    SELECT agent, COUNT(DISTINCT run_id) AS count
+  const catalogResult = getCatalog({
+    database,
+    storageRoot: storageRootPath(),
+    allowedWorkspacePaths: [...projects.map((project) => project.path), process.cwd()],
+  });
+  const presentationFor = (agent: string): AgentPresentation => {
+    const candidates = catalogResult.agents.filter((candidate) => candidate.codexReady && candidate.name.toLowerCase() === agent.toLowerCase());
+    const enabled = candidates.filter((candidate) => candidate.enabled);
+    if (enabled.length === 1) {
+      const candidate = enabled[0];
+      return { scope: candidate.scope, sourcePath: candidate.sourcePath, tags: candidate.tags, unresolved: false };
+    }
+    if (enabled.length > 1) return { tags: [], unresolved: true, candidates: enabled.map(({ scope, sourcePath, tags }) => ({ scope, sourcePath, tags })) };
+    return { tags: [], unresolved: false };
+  };
+  const serverTime = new Date().toISOString();
+  const staleCutoff = new Date(Date.now() - STALE_AFTER_SECONDS * 1000).toISOString();
+  const countRows = (selectedProjectId ? database.prepare(`
+    SELECT DISTINCT agent, run_id
     FROM events
     WHERE project_id = ?
-    GROUP BY agent
   `).all(selectedProjectId) : database.prepare(`
-    SELECT agent, COUNT(DISTINCT run_id) AS count
+    SELECT DISTINCT agent, run_id
     FROM events
-    GROUP BY agent
-  `).all() as Array<{ agent: string; count: number }>;
+  `).all()) as Array<{ agent: string; run_id: string }>;
+  const countedRuns = new Map<string, Set<string>>();
   for (const row of countRows) {
-    if (AGENT_IDS.includes(row.agent as AgentId)) {
-      agentRunCounts[row.agent as AgentId] = Number(row.count);
-    }
+    const agent = safeAgent(row.agent);
+    const runs = countedRuns.get(agent) ?? new Set<string>();
+    runs.add(row.run_id);
+    countedRuns.set(agent, runs);
+  }
+  for (const [agent, runIds] of countedRuns) {
+    agentRunCounts[agent] = runIds.size;
   }
 
-  const staleCutoff = new Date(Date.now() - STALE_AFTER_SECONDS * 1000).toISOString();
+  const metricRows = (selectedProjectId ? database.prepare(`
+    SELECT events.agent, events.run_id, events.project_id, events.agent_instance_id, events.status, events.message, events.occurred_at,
+      runs.status AS run_status, runs.completed_at, runs.updated_at AS run_updated_at
+    FROM events JOIN runs ON runs.id = events.run_id
+    WHERE events.project_id = ?
+    ORDER BY events.project_id, events.run_id, events.agent, COALESCE(events.agent_instance_id, ''), events.occurred_at, events.id
+  `).all(selectedProjectId) : database.prepare(`
+    SELECT events.agent, events.run_id, events.project_id, events.agent_instance_id, events.status, events.message, events.occurred_at,
+      runs.status AS run_status, runs.completed_at, runs.updated_at AS run_updated_at
+    FROM events JOIN runs ON runs.id = events.run_id
+    ORDER BY events.project_id, events.run_id, events.agent, COALESCE(events.agent_instance_id, ''), events.occurred_at, events.id
+  `).all()) as Record<string, unknown>[];
+  type InstanceWindow = { agent: string; startedAt: string | null; lastAt: string; runStatus: string; completedAt: string | null; updatedAt: string };
+  const instanceWindows = new Map<string, InstanceWindow>();
+  const metricFor = (agent: string) => {
+    const key = agent.toLowerCase();
+    return agentMetrics[key] ??= { agent, runCount: agentRunCounts[agent] ?? 0, trackedActiveSeconds: 0, activeInstances: 0, lastActivityAt: null, lastActivityMessage: null };
+  };
+  for (const row of metricRows) {
+    const agent = safeAgent(String(row.agent));
+    const metric = metricFor(agent);
+    const occurredAt = String(row.occurred_at);
+    if (!metric.lastActivityAt || Date.parse(occurredAt) >= Date.parse(metric.lastActivityAt)) {
+      metric.lastActivityAt = occurredAt;
+      metric.lastActivityMessage = String(row.message);
+    }
+    const instance = row.agent_instance_id ? String(row.agent_instance_id) : `legacy:${String(row.run_id)}:${agent}`;
+    const key = `${String(row.project_id)}:${String(row.run_id)}:${instance}`;
+    const window = instanceWindows.get(key) ?? { agent, startedAt: null, lastAt: occurredAt, runStatus: String(row.run_status), completedAt: row.completed_at ? String(row.completed_at) : null, updatedAt: String(row.run_updated_at) };
+    const status = safeStatus(row.status);
+    if ((status === "queued" || status === "working") && !window.startedAt) window.startedAt = occurredAt;
+    if (window.startedAt && status !== "queued" && status !== "working") {
+      metric.trackedActiveSeconds += Math.max(0, Math.floor((Date.parse(occurredAt) - Date.parse(window.startedAt)) / 1000));
+      window.startedAt = null;
+    }
+    window.lastAt = occurredAt;
+    window.runStatus = String(row.run_status);
+    window.completedAt = row.completed_at ? String(row.completed_at) : null;
+    window.updatedAt = String(row.run_updated_at);
+    instanceWindows.set(key, window);
+  }
+  for (const window of instanceWindows.values()) {
+    if (!window.startedAt) continue;
+    const freshWorkingRun = window.runStatus === "working" && Date.parse(window.updatedAt) >= Date.parse(staleCutoff);
+    const endedAt = freshWorkingRun ? serverTime : window.completedAt || window.updatedAt || window.lastAt;
+    metricFor(window.agent).trackedActiveSeconds += Math.max(0, Math.floor((Date.parse(endedAt) - Date.parse(window.startedAt)) / 1000));
+  }
+
   const recentRows = (selectedProjectId
     ? database.prepare("SELECT * FROM runs WHERE project_id = ? ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(selectedProjectId, staleCutoff)
     : database.prepare("SELECT * FROM runs ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(staleCutoff)) as Record<string, unknown>[];
@@ -421,7 +539,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const eventRows = run
     ? database.prepare("SELECT * FROM events WHERE run_id = ? AND project_id = ? ORDER BY occurred_at, id").all(run.id, run.projectId) as Record<string, unknown>[]
     : [];
-  const events = run ? eventRows.map((row) => rowToEvent(row, run.startedAt)) : [];
+  const events = run ? eventRows.map((row) => ({ ...rowToEvent(row, run.startedAt), presentation: presentationFor(safeAgent(row.agent)) })) : [];
   const recentEventRows = (selectedProjectId ? database.prepare(`
     SELECT events.*, runs.started_at AS run_started_at
     FROM events JOIN runs ON runs.id = events.run_id
@@ -432,7 +550,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     FROM events JOIN runs ON runs.id = events.run_id
     ORDER BY events.occurred_at DESC, events.id DESC LIMIT 100
   `).all()) as Record<string, unknown>[];
-  const recentEvents = recentEventRows.map((row) => rowToEvent(row, String(row.run_started_at)));
+  const recentEvents = recentEventRows.map((row) => ({ ...rowToEvent(row, String(row.run_started_at)), presentation: presentationFor(safeAgent(row.agent)) }));
 
   const activityRows = (selectedProjectId ? database.prepare(`
     SELECT events.*, projects.name AS project_name
@@ -474,14 +592,15 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
       active,
     });
   }
-  const serverTime = new Date().toISOString();
   const agentActivities = [...activityById.values()]
     .filter((activity) => activity.active)
     .map(({ active: _active, ...activity }): GuildAgentActivity => ({
       ...activity,
       durationSeconds: Math.max(0, Math.floor((Date.parse(serverTime) - Date.parse(activity.startedAt)) / 1000)),
+      presentation: presentationFor(activity.agent),
     }))
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  for (const activity of agentActivities) metricFor(activity.agent).activeInstances += 1;
 
   const aggregate = (selectedProjectId ? database.prepare(`
     SELECT COUNT(*) AS total_runs,
@@ -507,7 +626,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const totalRuns = Number(aggregate.total_runs || 0);
   const totalRuntimeSeconds = Number(aggregate.total_runtime_seconds || 0);
   const terminalRunCount = completedRuns + interruptedRuns;
-  const [mostUsedAgent, mostUsedAgentRuns] = (Object.entries(agentRunCounts) as Array<[AgentId, number]>).sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+  const [mostUsedAgent, mostUsedAgentRuns] = Object.entries(agentRunCounts).sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
   const statistics: GuildStatistics = {
     totalRuns,
     completedRuns,
@@ -520,7 +639,14 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     mostUsedAgent: mostUsedAgentRuns > 0 ? mostUsedAgent : null,
     mostUsedAgentRuns,
   };
-  return { projects, selectedProjectId, run, runs, events, recentEvents, agentActivities, agentRunCounts, statistics, serverTime };
+  const agentWorkspacePaths = [...new Set([...projects.map((project) => project.path), process.cwd()])];
+  return { projects, selectedProjectId, run, runs, events, recentEvents, agentActivities, agentRunCounts, agentMetrics, agentCatalog: catalogResult.agents, agentCatalogSettings: catalogResult.settings, agentWorkspacePaths, statistics, serverTime };
+}
+
+export function getCatalogDependencies() {
+  const database = getDatabase();
+  const projectRows = database.prepare("SELECT path FROM projects").all() as Array<{ path: string }>;
+  return { database, storageRoot: storageRootPath(), allowedWorkspacePaths: [...projectRows.map((project) => project.path), process.cwd()] };
 }
 
 export function getStorageHealth(): GuildStorageHealth {

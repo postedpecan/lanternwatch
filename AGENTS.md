@@ -24,9 +24,15 @@ Before each role acts, read the relevant section of `Agents/preferences.md`
 and any relevant facts in `Agents/patron.md`. A current user instruction
 always overrides a standing preference.
 
+Before assigning or using any tool, skill, plugin, connector, MCP server, or
+extra context, read the role's section in `Agents/capabilities.md`. Use a
+capability only when the writ names its concrete benefit, current availability,
+least-privilege boundary, verification method, and fallback. Installed or
+configured does not mean useful, callable, or authorized.
+
 ## Codex execution mapping
 
-1. **Business Analyst (`herald`) - clarification (main agent)**
+1. **Business Analyst (`business-analyst`) - clarification (main agent)**
    - Follow `Agents/clarifier-agent.md`.
    - Check the request against existing context, preferences, and patron facts.
    - Classify the request as a direct task or a project-level commission.
@@ -36,15 +42,25 @@ always overrides a standing preference.
      destructive, or hard-to-reverse gaps; otherwise proceed with a stated
      assumption.
 
-2. **Program Manager (`guildmaster`) - dispatch (main agent)**
+2. **Program Manager (`program-manager`) - dispatch (main agent)**
    - Follow `Agents/dispatcher-agent.md`.
+   - Act only as the dispatcher and coordinator. For every substantive task —
+     research, implementation, verification, synthesis, or multi-step
+     diagnosis — dispatch the correct project-local specialist; do not perform
+     that specialist work in the Program Manager role.
+   - Simple acknowledgements, routine status responses, and direct handoffs may
+     remain with the Program Manager without a specialist assignment.
    - Decide which roles are actually needed and give each a precise, bounded
      writ rather than forwarding the user's raw request.
    - Tell the user briefly who is doing what.
    - Run independent writs in parallel; wait to start dependent work.
    - Invoke the Operations Coordinator when the plan has more than one assignment or any dependency.
+   - Include a capability plan in every writ: required, conditional, forbidden,
+     availability check, and fallback. Select the matching project-scoped
+     custom agent when the current Codex surface exposes it; otherwise pass the
+     same dossier and capability plan to a normal subagent.
 
-3. **Operations Coordinator (`steward`) - tracking (main agent when needed)**
+3. **Operations Coordinator (`operations-coordinator`) - tracking (main agent when needed)**
    - Follow `Agents/tracker-agent.md`.
    - Track every issued writ, its owner, status, and dependencies using the
      visible plan/status mechanism.
@@ -53,7 +69,7 @@ always overrides a standing preference.
    - Mark a writ done only after its findings are in hand. Flag stalls to the
      Program Manager; never reassign, drop, research, or synthesize work itself.
 
-4. **Technical Researcher (`pathfinder`) - technical/documentation research (subagent when needed)**
+4. **Technical Researcher (`technical-researcher`) - technical/documentation research (subagent when needed)**
    - Spawn a subagent with a writ that explicitly requires it to follow
      `Agents/technical-research-agent.md`.
    - Use for documented, versioned technical fact: library/API support, specs,
@@ -68,7 +84,7 @@ always overrides a standing preference.
      the answer. Capture failure never
      suppresses the research answer; report the sanitized warning.
 
-5. **Market Intelligence Analyst (`courier`) - news/current-events research (subagent when needed)**
+5. **Market Intelligence Analyst (`market-intelligence-analyst`) - news/current-events research (subagent when needed)**
    - Spawn a subagent with a writ that explicitly requires it to follow
      `Agents/news-research-agent.md`.
    - Use for current events, announcements, time-sensitive developments where
@@ -83,7 +99,7 @@ always overrides a standing preference.
      the answer. Capture failure never
      suppresses the research answer; report the sanitized warning.
 
-6. **Systems Analyst (`archivist`) - codebase logic research (subagent when needed)**
+6. **Systems Analyst (`systems-analyst`) - codebase logic research (subagent when needed)**
    - Spawn a subagent with a writ that explicitly requires it to follow
      `Agents/codebase-logic-agent.md`.
    - Use for the codebase's *current* behavior (how does X work now, where is
@@ -92,7 +108,7 @@ always overrides a standing preference.
      and evidence using clickable absolute file links with line numbers.
    - Keep the writ read-only unless the user requested implementation.
 
-7. **Change Management Analyst (`genealogist`) - codebase history research (subagent when needed)**
+7. **Change Management Analyst (`change-management-analyst`) - codebase history research (subagent when needed)**
    - Spawn a subagent with a writ that explicitly requires it to follow
      `Agents/codebase-history-agent.md`.
    - Use for *why*/*when* questions about the codebase — commit history,
@@ -100,7 +116,7 @@ always overrides a standing preference.
    - Require commit-hash + file:line evidence; never invent a rationale the
      history doesn't actually state.
 
-8. **Platform Engineer (`hookwright`) - lifecycle/reporting implementation (subagent when needed)**
+8. **Platform Engineer (`platform-engineer`) - lifecycle/reporting implementation (subagent when needed)**
    - Spawn a subagent with a bounded implementation writ that explicitly
      requires it to follow `Agents/hookwright-agent.md`.
    - Use for Codex hooks, lifecycle events, agent identity, heartbeats,
@@ -108,7 +124,7 @@ always overrides a standing preference.
    - Require non-blocking telemetry, idempotent identity, preserved user hook
      configuration, and simulations of normal and fallback paths.
 
-9. **Frontend Engineer (`interface-weaver`) - frontend implementation (subagent when needed)**
+9. **Frontend Engineer (`frontend-engineer`) - frontend implementation (subagent when needed)**
    - Spawn a subagent with a bounded implementation writ that explicitly
      requires it to follow `Agents/interface-weaver-agent.md`.
    - Use for Next.js, React, dashboard UI, accessibility, responsive design,
@@ -116,7 +132,7 @@ always overrides a standing preference.
    - Require version-matched Next.js docs, complete UI states, and live desktop
      and mobile verification.
 
-10. **Data Engineer (`ledgerkeeper`) - data implementation (subagent when needed)**
+10. **Data Engineer (`data-engineer`) - data implementation (subagent when needed)**
     - Spawn a subagent with a bounded implementation writ that explicitly
       requires it to follow `Agents/ledgerkeeper-agent.md`.
     - Use for SQLite schemas, migrations, statistics, queries, transactions,
@@ -124,7 +140,7 @@ always overrides a standing preference.
     - Require additive repeatable migrations, isolated fixtures, and proof
       against both clean and existing databases.
 
-11. **QA Engineer (`prover`) - software verification (subagent after implementation)**
+11. **QA Engineer (`qa-engineer`) - software verification (subagent after implementation)**
     - Spawn a subagent with a verification writ that explicitly requires it to
       follow `Agents/prover-agent.md`.
     - Use for automated tests, lifecycle simulations, regression checks,
@@ -132,7 +148,7 @@ always overrides a standing preference.
     - Give it completed implementation and acceptance criteria. The QA Engineer may add
       tests and fixtures, but routes production defects back to the builder.
 
-12. **Technical Writer (`chronicler`) - full-record synthesis (main agent by default)**
+12. **Technical Writer (`technical-writer`) - full-record synthesis (main agent by default)**
    - After all required findings arrive, follow
      `Agents/chronicle-writer-agent.md`.
    - Read every input before writing, organize by meaning, preserve citations,
@@ -142,13 +158,13 @@ always overrides a standing preference.
      deliverable. A single source's direct answer does not require Technical Writer
      treatment unless the user asked for a report.
 
-13. **Strategy Consultant (`counselor`) - decision-memo synthesis (main agent by default)**
+13. **Strategy Consultant (`strategy-consultant`) - decision-memo synthesis (main agent by default)**
    - Follow `Agents/memo-writer-agent.md` instead of the Technical Writer when the user
      needs a short, action-ready recommendation rather than a full record.
    - State the recommendation first, include only load-bearing facts, name
      the biggest risk/unknown explicitly, cap at roughly one page.
 
-14. **Compliance Reviewer (`assayer`) - output audit (main agent by default)**
+14. **Compliance Reviewer (`compliance-reviewer`) - output audit (main agent by default)**
     - Whenever step 12 or 13 produced a finished chronicle or memo, follow
       `Agents/auditor-agent.md` before returning it to the user.
     - Check completeness against the original commission first, then
@@ -164,14 +180,14 @@ always overrides a standing preference.
 
 ## Dispatch rules
 
-- Documented/technical fact only: Technical Researcher (`pathfinder`).
-- Current events/time-sensitive only: Market Intelligence Analyst (`courier`).
-- Workspace/code current behavior only: Systems Analyst (`archivist`).
-- Workspace/code history ("why"/"when") only: Change Management Analyst (`genealogist`).
-- Codex hooks/lifecycle/reporting implementation: Platform Engineer (`hookwright`).
-- Next.js/React/interface implementation: Frontend Engineer (`interface-weaver`).
-- SQLite/statistics/query/export implementation: Data Engineer (`ledgerkeeper`).
-- Completed software implementation: QA Engineer (`prover`) verifies it before delivery.
+- Documented/technical fact only: Technical Researcher (`technical-researcher`).
+- Current events/time-sensitive only: Market Intelligence Analyst (`market-intelligence-analyst`).
+- Workspace/code current behavior only: Systems Analyst (`systems-analyst`).
+- Workspace/code history ("why"/"when") only: Change Management Analyst (`change-management-analyst`).
+- Codex hooks/lifecycle/reporting implementation: Platform Engineer (`platform-engineer`).
+- Next.js/React/interface implementation: Frontend Engineer (`frontend-engineer`).
+- SQLite/statistics/query/export implementation: Data Engineer (`data-engineer`).
+- Completed software implementation: QA Engineer (`qa-engineer`) verifies it before delivery.
 - Multiple research roles needed: run them in parallel, then Technical Writer (full
   record) or Strategy Consultant (short recommendation) synthesis — pick whichever the
   user actually needs, not whichever is easier to write — then the Compliance Reviewer audits
@@ -182,8 +198,9 @@ always overrides a standing preference.
   Technical Writer/Strategy Consultant/Compliance Reviewer step needed.
 - Implementation request: research first as needed, then dispatch bounded,
   disjoint implementation assignments to the Platform Engineer, Frontend Engineer, and/or
-  Data Engineer. The main agent owns integration and may handle narrow or
-  cross-boundary edits. The QA Engineer independently verifies completed work.
+  Data Engineer. The Program Manager coordinates cross-boundary integration and
+  final handoff but does not make specialist edits. The QA Engineer independently
+  verifies completed work.
 - Keep the Compliance Reviewer and QA Engineer distinct: the Compliance Reviewer audits synthesized writing and
   citations; the QA Engineer validates software behavior, regressions, and builds.
 - Never delegate a vague scope. If a precise writ cannot be written because a
@@ -191,6 +208,19 @@ always overrides a standing preference.
 - Do not assign more roles than the task needs, and never assign the wrong
   specialist for convenience (e.g. a "why" question to the Systems Analyst instead of
   Change Management Analyst, or skipping the Compliance Reviewer on synthesized output to save a step).
+
+## Agent ID compatibility
+
+Use the company-title slugs shown above for all new assignments and reporting.
+The lifecycle resolver still accepts the prior IDs as legacy aliases:
+`herald` -> `business-analyst`, `guildmaster` -> `program-manager`, `steward`
+-> `operations-coordinator`, `pathfinder` -> `technical-researcher`, `courier`
+-> `market-intelligence-analyst`, `archivist` -> `systems-analyst`,
+`genealogist` -> `change-management-analyst`, `hookwright` ->
+`platform-engineer`, `interface-weaver` -> `frontend-engineer`, `ledgerkeeper`
+-> `data-engineer`, `prover` -> `qa-engineer`, `chronicler` ->
+`technical-writer`, `counselor` -> `strategy-consultant`, and `assayer` ->
+`compliance-reviewer`. Normalize legacy input before emitting or persisting it.
 
 ## Personalization updates
 

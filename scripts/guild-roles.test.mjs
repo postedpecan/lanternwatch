@@ -5,28 +5,28 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { cliEvent, normalizeEventAgentIds, notifyEvent } from "./guild-report.mjs";
 import { reporterFallbackCommand, safeNotifyPayload } from "./guild-notify.mjs";
-import { DEFAULT_STORAGE_ROOT, lifecycleStoragePaths } from "./guild-paths.mjs";
-import { AGENT_IDS, COMPANY_ROLE_ALIASES, COMPANY_ROLE_TITLES, canonicalAgentId, companyTitleForAgent, isAmbiguousAgentType, resolveAgentRole, roleForAgentType } from "./guild-roles.mjs";
+import { lifecycleStoragePaths } from "./guild-paths.mjs";
+import { AGENT_IDS, COMPANY_ROLE_ALIASES, COMPANY_ROLE_TITLES, LEGACY_AGENT_ID_ALIASES, canonicalAgentId, companyTitleForAgent, isAmbiguousAgentType, resolveAgentRole, roleForAgentType } from "./guild-roles.mjs";
 import { ageSeconds, parseLatestHookLog } from "../lib/guild-health.ts";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readProjectFile = (relativePath) => readFileSync(path.join(projectRoot, relativePath), "utf8");
 
 const dossiers = {
-  herald: "clarifier-agent.md",
-  guildmaster: "dispatcher-agent.md",
-  steward: "tracker-agent.md",
-  pathfinder: "technical-research-agent.md",
-  courier: "news-research-agent.md",
-  archivist: "codebase-logic-agent.md",
-  genealogist: "codebase-history-agent.md",
-  hookwright: "hookwright-agent.md",
-  "interface-weaver": "interface-weaver-agent.md",
-  ledgerkeeper: "ledgerkeeper-agent.md",
-  prover: "prover-agent.md",
-  chronicler: "chronicle-writer-agent.md",
-  counselor: "memo-writer-agent.md",
-  assayer: "auditor-agent.md",
+  "business-analyst": "clarifier-agent.md",
+  "program-manager": "dispatcher-agent.md",
+  "operations-coordinator": "tracker-agent.md",
+  "technical-researcher": "technical-research-agent.md",
+  "market-intelligence-analyst": "news-research-agent.md",
+  "systems-analyst": "codebase-logic-agent.md",
+  "change-management-analyst": "codebase-history-agent.md",
+  "platform-engineer": "hookwright-agent.md",
+  "frontend-engineer": "interface-weaver-agent.md",
+  "data-engineer": "ledgerkeeper-agent.md",
+  "qa-engineer": "prover-agent.md",
+  "technical-writer": "chronicle-writer-agent.md",
+  "strategy-consultant": "memo-writer-agent.md",
+  "compliance-reviewer": "auditor-agent.md",
 };
 
 test("server and browser agent registries match", () => {
@@ -47,35 +47,104 @@ test("every registered role has a dossier and workflow references", () => {
   }
 });
 
-test("lifecycle agent identity handles task-name aliases", () => {
-  assert.equal(roleForAgentType("/root/hookwright_hooks"), "hookwright");
-  assert.equal(roleForAgentType("/root/interface_weaver_dashboard"), "interface-weaver");
-  assert.equal(roleForAgentType("ledgerkeeper migration"), "ledgerkeeper");
-  assert.equal(roleForAgentType("prover_build"), "prover");
-  assert.equal(roleForAgentType("technical-research"), "pathfinder");
-  assert.equal(roleForAgentType("unclassified-specialist"), "archivist");
+test("every registered role has selective capability policy and a Codex custom-agent binding", () => {
+  const capabilities = readProjectFile("Agents/capabilities.md");
+  const readOnlyAgents = new Set([
+    "business-analyst",
+    "program-manager",
+    "operations-coordinator",
+    "technical-researcher",
+    "market-intelligence-analyst",
+    "systems-analyst",
+    "change-management-analyst",
+    "technical-writer",
+    "strategy-consultant",
+    "compliance-reviewer",
+  ]);
+
+  for (const agent of AGENT_IDS) {
+    const heading = `## \`${agent}\``;
+    const start = capabilities.indexOf(heading);
+    assert.notEqual(start, -1, `${agent} capability section is missing`);
+    const next = capabilities.indexOf("\n## ", start + heading.length);
+    const section = capabilities.slice(start, next === -1 ? undefined : next);
+    assert.match(section, /Availability check:/, `${agent} needs an availability check`);
+    assert.match(section, /Fallback:/, `${agent} needs a fallback`);
+    assert.match(section, /Do not:/, `${agent} needs an explicit capability boundary`);
+
+    const configPath = path.join(projectRoot, ".codex", "agents", `${agent}.toml`);
+    assert.ok(existsSync(configPath), `${agent} custom-agent config is missing`);
+    const config = readFileSync(configPath, "utf8");
+    assert.match(config, new RegExp(`^name = "${agent}"$`, "m"));
+    assert.match(config, /developer_instructions = """/);
+    assert.ok(config.includes(`Agents/${dossiers[agent]}`), `${agent} config must route to its dossier`);
+    assert.ok(config.includes("Agents/capabilities.md"), `${agent} config must route to capability policy`);
+    if (readOnlyAgents.has(agent)) {
+      assert.match(config, /^sandbox_mode = "read-only"$/m, `${agent} must be read-only`);
+    } else {
+      assert.doesNotMatch(config, /^sandbox_mode\s*=/m, `${agent} must inherit the parent's permission mode`);
+    }
+  }
 });
 
-test("company titles and task-name slugs normalize to canonical legacy IDs", () => {
+test("role dossiers point to the current company-title preference headings", () => {
+  const preferenceHeadings = {
+    "business-analyst": "Business Analyst",
+    "program-manager": "Program Manager",
+    "operations-coordinator": "Operations Coordinator",
+    "technical-researcher": "Technical Researcher",
+    "market-intelligence-analyst": "Market Intelligence Analyst",
+    "systems-analyst": "Systems Analyst",
+    "change-management-analyst": "Change Management Analyst",
+    "platform-engineer": "Platform Engineer",
+    "frontend-engineer": "Frontend Engineer",
+    "data-engineer": "Data Engineer",
+    "qa-engineer": "QA Engineer",
+    "technical-writer": "Technical Writer",
+    "strategy-consultant": "Strategy Consultant",
+    "compliance-reviewer": "Compliance Reviewer",
+  };
+
+  const preferences = readProjectFile("Agents/preferences.md");
+  for (const agent of AGENT_IDS) {
+    const title = preferenceHeadings[agent];
+    assert.ok(preferences.includes(`## ${title}`), `${title} preference heading is missing`);
+    assert.ok(readProjectFile(path.join("Agents", dossiers[agent])).includes(`read the "${title}" section`), `${agent} dossier references a stale preference heading`);
+  }
+});
+
+test("lifecycle agent identity handles current and legacy task-name aliases", () => {
+  assert.equal(roleForAgentType("/root/platform_engineer_hooks"), "platform-engineer");
+  assert.equal(roleForAgentType("/root/hookwright_hooks"), "platform-engineer");
+  assert.equal(roleForAgentType("/root/frontend_engineer_dashboard"), "frontend-engineer");
+  assert.equal(roleForAgentType("/root/interface_weaver_dashboard"), "frontend-engineer");
+  assert.equal(roleForAgentType("ledgerkeeper migration"), "data-engineer");
+  assert.equal(roleForAgentType("prover_build"), "qa-engineer");
+  assert.equal(roleForAgentType("technical-research"), "technical-researcher");
+  assert.equal(roleForAgentType("unclassified-specialist"), "systems-analyst");
+});
+
+test("company titles and task-name slugs normalize to matching canonical IDs", () => {
   const companyTitles = {
-    "Business Analyst": "herald",
-    "Program Manager": "guildmaster",
-    "Operations Coordinator": "steward",
-    "Technical Researcher": "pathfinder",
-    "Market Intelligence Analyst": "courier",
-    "Systems Analyst": "archivist",
-    "Change Management Analyst": "genealogist",
-    "Platform Engineer": "hookwright",
-    "Frontend Engineer": "interface-weaver",
-    "Data Engineer": "ledgerkeeper",
-    "QA Engineer": "prover",
-    "Technical Writer": "chronicler",
-    "Strategy Consultant": "counselor",
-    "Compliance Reviewer": "assayer",
+    "Business Analyst": "business-analyst",
+    "Program Manager": "program-manager",
+    "Operations Coordinator": "operations-coordinator",
+    "Technical Researcher": "technical-researcher",
+    "Market Intelligence Analyst": "market-intelligence-analyst",
+    "Systems Analyst": "systems-analyst",
+    "Change Management Analyst": "change-management-analyst",
+    "Platform Engineer": "platform-engineer",
+    "Frontend Engineer": "frontend-engineer",
+    "Data Engineer": "data-engineer",
+    "QA Engineer": "qa-engineer",
+    "Technical Writer": "technical-writer",
+    "Strategy Consultant": "strategy-consultant",
+    "Compliance Reviewer": "compliance-reviewer",
   };
 
   assert.equal(Object.keys(COMPANY_ROLE_ALIASES).length, AGENT_IDS.length);
   assert.equal(Object.keys(COMPANY_ROLE_TITLES).length, AGENT_IDS.length);
+  assert.equal(Object.keys(LEGACY_AGENT_ID_ALIASES).length, AGENT_IDS.length);
   for (const [title, canonicalId] of Object.entries(companyTitles)) {
     const slug = title.toLowerCase().replace(/\s+/g, "-");
     const taskName = `/root/${slug.replaceAll("-", "_")}_task`;
@@ -84,8 +153,12 @@ test("company titles and task-name slugs normalize to canonical legacy IDs", () 
     assert.equal(canonicalAgentId(taskName), canonicalId, `${taskName} task name`);
     assert.deepEqual(resolveAgentRole(title), { role: canonicalId, matched: true });
     assert.equal(roleForAgentType(taskName), canonicalId);
-    assert.equal(canonicalAgentId(canonicalId), canonicalId, `${canonicalId} legacy ID`);
-    assert.equal(companyTitleForAgent(canonicalId), title, `${canonicalId} public title`);
+    assert.equal(canonicalAgentId(canonicalId), canonicalId, `${canonicalId} canonical ID`);
+    assert.equal(companyTitleForAgent(canonicalId), title, `${canonicalId} company title`);
+  }
+  for (const [legacyId, canonicalId] of Object.entries(LEGACY_AGENT_ID_ALIASES)) {
+    assert.equal(canonicalAgentId(legacyId), canonicalId, `${legacyId} legacy ID`);
+    assert.equal(canonicalAgentId(`/root/${legacyId.replaceAll("-", "_")}_task`), canonicalId, `${legacyId} legacy task name`);
   }
 });
 
@@ -94,12 +167,12 @@ test("reporter normalization keeps company aliases out of stored and API identit
     agent: "Frontend Engineer",
     from: "/root/program_manager_dispatch",
   }), {
-    agent: "interface-weaver",
-    from: "guildmaster",
+    agent: "frontend-engineer",
+    from: "program-manager",
   });
   assert.deepEqual(normalizeEventAgentIds({ agent: "unknown", from: "unknown" }), {
-    agent: "guildmaster",
-    from: undefined,
+    agent: "unknown",
+    from: "unknown",
   });
 });
 
@@ -110,53 +183,53 @@ test("manual reporting accepts company titles while emitting canonical IDs", () 
     "--status", "working",
     "--project", projectRoot,
   ]);
-  assert.equal(event.agent, "herald");
-  assert.equal(event.from, "guildmaster");
+  assert.equal(event.agent, "business-analyst");
+  assert.equal(event.from, "program-manager");
   assert.equal(event.message, "Business Analyst changed state to working.");
 });
 
-test("Claude Code built-in subagent types get an explicit role, not the archivist fallback by accident", () => {
+test("Claude Code built-in subagent types get an explicit role, not the Systems Analyst fallback by accident", () => {
   // These are Claude Code's known, enumerable built-in subagent type strings.
   // None of them textually contain a guild role id, so before the explicit
   // CLAUDE_CODE_BUILTIN_ROLES mapping existed they all silently collapsed to
-  // the "archivist" default. Each must now resolve via a deliberate, named
+  // the "systems-analyst" default. Each must resolve via a deliberate, named
   // mapping (see the comment above CLAUDE_CODE_BUILTIN_ROLES in guild-roles.mjs).
-  assert.equal(roleForAgentType("general-purpose"), "archivist");
-  assert.equal(roleForAgentType("Explore"), "archivist");
-  assert.equal(roleForAgentType("Plan"), "guildmaster");
-  assert.equal(roleForAgentType("claude-code-guide"), "pathfinder");
-  assert.equal(roleForAgentType("statusline-setup"), "interface-weaver");
+  assert.equal(roleForAgentType("general-purpose"), "systems-analyst");
+  assert.equal(roleForAgentType("Explore"), "systems-analyst");
+  assert.equal(roleForAgentType("Plan"), "program-manager");
+  assert.equal(roleForAgentType("claude-code-guide"), "technical-researcher");
+  assert.equal(roleForAgentType("statusline-setup"), "frontend-engineer");
   // Case/casing and separator variants must resolve the same way.
-  assert.equal(roleForAgentType("General_Purpose"), "archivist");
-  assert.equal(roleForAgentType("STATUSLINE SETUP"), "interface-weaver");
-  // A genuinely unclassified custom type must still fall back to archivist.
-  assert.equal(roleForAgentType("unclassified-specialist"), "archivist");
+  assert.equal(roleForAgentType("General_Purpose"), "systems-analyst");
+  assert.equal(roleForAgentType("STATUSLINE SETUP"), "frontend-engineer");
+  // A genuinely unclassified custom type still falls back to Systems Analyst.
+  assert.equal(roleForAgentType("unclassified-specialist"), "systems-analyst");
 });
 
-test("resolveAgentRole/isAmbiguousAgentType distinguish confident matches from the low-confidence archivist default", () => {
+test("resolveAgentRole/isAmbiguousAgentType distinguish confident matches from the low-confidence Systems Analyst default", () => {
   // Confident matches: all five Claude Code builtin roles.
-  assert.deepEqual(resolveAgentRole("general-purpose"), { role: "archivist", matched: true });
-  assert.deepEqual(resolveAgentRole("explore"), { role: "archivist", matched: true });
-  assert.deepEqual(resolveAgentRole("plan"), { role: "guildmaster", matched: true });
-  assert.deepEqual(resolveAgentRole("claude-code-guide"), { role: "pathfinder", matched: true });
-  assert.deepEqual(resolveAgentRole("statusline-setup"), { role: "interface-weaver", matched: true });
+  assert.deepEqual(resolveAgentRole("general-purpose"), { role: "systems-analyst", matched: true });
+  assert.deepEqual(resolveAgentRole("explore"), { role: "systems-analyst", matched: true });
+  assert.deepEqual(resolveAgentRole("plan"), { role: "program-manager", matched: true });
+  assert.deepEqual(resolveAgentRole("claude-code-guide"), { role: "technical-researcher", matched: true });
+  assert.deepEqual(resolveAgentRole("statusline-setup"), { role: "frontend-engineer", matched: true });
   for (const type of ["general-purpose", "explore", "plan", "claude-code-guide", "statusline-setup"]) {
     assert.equal(isAmbiguousAgentType(type), false, `${type} should not be ambiguous`);
   }
   // Confident match: a role-id substring.
-  assert.deepEqual(resolveAgentRole("prover_build"), { role: "prover", matched: true });
+  assert.deepEqual(resolveAgentRole("prover_build"), { role: "qa-engineer", matched: true });
   assert.equal(isAmbiguousAgentType("prover_build"), false);
   // Confident match: a research/technical/news keyword.
-  assert.deepEqual(resolveAgentRole("technical-research"), { role: "pathfinder", matched: true });
+  assert.deepEqual(resolveAgentRole("technical-research"), { role: "technical-researcher", matched: true });
   assert.equal(isAmbiguousAgentType("technical-research"), false);
-  assert.deepEqual(resolveAgentRole("breaking-news-scan"), { role: "courier", matched: true });
+  assert.deepEqual(resolveAgentRole("breaking-news-scan"), { role: "market-intelligence-analyst", matched: true });
   assert.equal(isAmbiguousAgentType("breaking-news-scan"), false);
   // Ambiguous: the generic "claude" catch-all, an unrecognized custom type,
   // and empty/undefined input all fall through to the unconditional default.
-  assert.deepEqual(resolveAgentRole("claude"), { role: "archivist", matched: false });
-  assert.deepEqual(resolveAgentRole("unknown-thing"), { role: "archivist", matched: false });
-  assert.deepEqual(resolveAgentRole(""), { role: "archivist", matched: false });
-  assert.deepEqual(resolveAgentRole(undefined), { role: "archivist", matched: false });
+  assert.deepEqual(resolveAgentRole("claude"), { role: "systems-analyst", matched: false });
+  assert.deepEqual(resolveAgentRole("unknown-thing"), { role: "systems-analyst", matched: false });
+  assert.deepEqual(resolveAgentRole(""), { role: "systems-analyst", matched: false });
+  assert.deepEqual(resolveAgentRole(undefined), { role: "systems-analyst", matched: false });
   for (const type of ["claude", "unknown-thing", "", undefined]) {
     assert.equal(isAmbiguousAgentType(type), true, `${String(type)} should be ambiguous`);
   }
@@ -168,10 +241,12 @@ test("resolveAgentRole/isAmbiguousAgentType distinguish confident matches from t
 });
 
 test("lifecycle storage paths honor an isolated root and preserve the production default", () => {
-  assert.deepEqual(lifecycleStoragePaths(), {
-    root: DEFAULT_STORAGE_ROOT,
-    stateDirectory: path.join(DEFAULT_STORAGE_ROOT, "sessions"),
-    logDirectory: path.join(DEFAULT_STORAGE_ROOT, "logs"),
+  const portableHome = path.join(projectRoot, ".tmp", "portable-home");
+  const portableDefault = path.join(portableHome, ".lanternwatch");
+  assert.deepEqual(lifecycleStoragePaths(undefined, undefined, { USERPROFILE: portableHome }), {
+    root: portableDefault,
+    stateDirectory: path.join(portableDefault, "sessions"),
+    logDirectory: path.join(portableDefault, "logs"),
   });
   const isolatedRoot = path.join(projectRoot, ".tmp", "lifecycle-storage");
   assert.deepEqual(lifecycleStoragePaths(isolatedRoot), {

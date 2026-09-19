@@ -31,6 +31,11 @@ function identifier(value, fallback) {
   return cleaned.replace(/[^a-zA-Z0-9._:-]/g, "-");
 }
 
+function eventAgent(value, fallback = "program-manager") {
+  const candidate = identifier(value, fallback);
+  return canonicalAgentId(candidate) || candidate;
+}
+
 export function notifyEvent(payload) {
   const projectPath = clean(payload.cwd ?? payload["project-path"], process.cwd());
   const threadId = identifier(payload["thread-id"] ?? payload.thread_id, "thread");
@@ -41,7 +46,7 @@ export function notifyEvent(payload) {
     projectName: path.basename(projectPath),
     runId: `codex-${threadId}-${turnId}`,
     source: "codex",
-    agent: "guildmaster",
+    agent: "program-manager",
     status: "complete",
     message: "Codex turn completed and returned to idle.",
     quest: "Codex workspace activity",
@@ -52,9 +57,10 @@ export function notifyEvent(payload) {
 
 export function cliEvent(args) {
   const projectPath = path.resolve(clean(option(args, "project"), process.cwd()));
-  const agentCandidate = clean(option(args, "agent"), "guildmaster");
-  const agent = canonicalAgentId(agentCandidate) || "guildmaster";
-  const from = canonicalAgentId(option(args, "from"));
+  const agentCandidate = clean(option(args, "agent"), "program-manager");
+  const agent = eventAgent(agentCandidate);
+  const fromValue = option(args, "from");
+  const from = fromValue === undefined ? undefined : eventAgent(fromValue, "unknown-agent");
   const statusCandidate = clean(option(args, "status"), "working").toLowerCase();
   const runId = clean(option(args, "run-id"), `manual-${createHash("sha1").update(projectPath).digest("hex").slice(0, 10)}`);
   return {
@@ -67,7 +73,7 @@ export function cliEvent(args) {
       : undefined,
     agent,
     status: STATUSES.has(statusCandidate) ? statusCandidate : "working",
-    message: clean(option(args, "message"), `${companyTitleForAgent(agent)} changed state to ${statusCandidate}.`),
+    message: clean(option(args, "message"), `${companyTitleForAgent(agent) || agent} changed state to ${statusCandidate}.`),
     quest: clean(option(args, "quest"), "Codex workspace activity"),
     from,
     agentInstanceId: option(args, "agent-instance-id"),
@@ -79,8 +85,8 @@ export function cliEvent(args) {
 export function normalizeEventAgentIds(event) {
   return {
     ...event,
-    agent: canonicalAgentId(event?.agent) || "guildmaster",
-    from: canonicalAgentId(event?.from),
+    agent: eventAgent(event?.agent),
+    from: event?.from === undefined || event?.from === null ? undefined : eventAgent(event.from, "unknown-agent"),
   };
 }
 
@@ -203,7 +209,16 @@ export function writeDirect(event) {
     database.close();
     throw error;
   }
-  if (terminal) exportMarkdown(database, event, projectId, runId);
+  if (terminal) {
+    try {
+      exportMarkdown(database, event, projectId, runId);
+    } catch (exportError) {
+      // Markdown export is optional. The lifecycle event is already committed,
+      // so an unavailable vault must not make the reporter claim persistence
+      // failed or trigger a duplicate fallback write.
+      logReporter("export-failed", exportError, event);
+    }
+  }
   database.close();
 }
 

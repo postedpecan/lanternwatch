@@ -1,5 +1,5 @@
 {
-  "herald": {
+  "business-analyst": {
     "idle": {
       "file": "/guild/sprites/herald-idle.png",
       "frames": 5,
@@ -13,7 +13,7 @@
       "frameHeight": 92
     }
   },
-  "guildmaster": {
+  "program-manager": {
     "idle": {
       "file": "/guild/sprites/guildmaster-idle.png",
       "frames": 5,
@@ -27,7 +27,7 @@
       "frameHeight": 92
     }
   },
-  "steward": {
+  "operations-coordinator": {
     "idle": {
       "file": "/guild/sprites/steward-idle.png",
       "frames": 5,
@@ -41,7 +41,7 @@
       "frameHeight": 92
     }
   },
-  "pathfinder": {
+  "technical-researcher": {
     "idle": {
       "file": "/guild/sprites/pathfinder-idle.png",
       "frames": 5,
@@ -55,7 +55,7 @@
       "frameHeight": 92
     }
   },
-  "courier": {
+  "market-intelligence-analyst": {
     "idle": {
       "file": "/guild/sprites/courier-idle.png",
       "frames": 5,
@@ -69,7 +69,7 @@
       "frameHeight": 92
     }
   },
-  "archivist": {
+  "systems-analyst": {
     "idle": {
       "file": "/guild/sprites/archivist-idle.png",
       "frames": 5,
@@ -83,7 +83,7 @@
       "frameHeight": 92
     }
   },
-  "genealogist": {
+  "change-management-analyst": {
     "idle": {
       "file": "/guild/sprites/genealogist-idle.png",
       "frames": 5,
@@ -97,7 +97,7 @@
       "frameHeight": 92
     }
   },
-  "chronicler": {
+  "technical-writer": {
     "idle": {
       "file": "/guild/sprites/chronicler-idle.png",
       "frames": 5,
@@ -111,7 +111,7 @@
       "frameHeight": 92
     }
   },
-  "counselor": {
+  "strategy-consultant": {
     "idle": {
       "file": "/guild/sprites/counselor-idle.png",
       "frames": 5,
@@ -125,7 +125,7 @@
       "frameHeight": 92
     }
   },
-  "assayer": {
+  "compliance-reviewer": {
     "idle": {
       "file": "/guild/sprites/assayer-idle.png",
       "frames": 5,

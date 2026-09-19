@@ -1,4 +1,4 @@
-import type { AgentId, RoomStatus } from "@/lib/guild-data";
+import type { RoomStatus } from "@/lib/guild-data";
 import type { HookLogStatus, HookSource } from "@/lib/guild-health";
 
 export type GuildProject = {
@@ -25,20 +25,21 @@ export type StoredGuildEvent = {
   eventId: string;
   projectId: string;
   runId: string;
-  agent: AgentId;
+  agent: string;
   status: RoomStatus;
   message: string;
   quest: string | null;
-  from: AgentId | null;
+  from: string | null;
   occurredAt: string;
   elapsedSeconds: number;
   agentInstanceId: string | null;
+  presentation?: AgentPresentation;
 };
 
 export type GuildAgentActivity = {
   id: string;
   agentInstanceId: string;
-  agent: AgentId;
+  agent: string;
   projectId: string;
   projectName: string;
   runId: string;
@@ -47,6 +48,55 @@ export type GuildAgentActivity = {
   startedAt: string;
   updatedAt: string;
   durationSeconds: number;
+  presentation?: AgentPresentation;
+};
+
+export type CatalogAgent = {
+  id: string;
+  name: string;
+  description: string;
+  scope: "global" | "workspace" | "external" | "lanternwatch";
+  sourcePath: string;
+  enabled: boolean;
+  tags: string[];
+  collision: boolean;
+  readOnly: boolean;
+  codexReady: boolean;
+};
+
+export type CatalogSettings = {
+  discoveryMode: "manual" | "automatic-once";
+  collisionPolicy: "rename" | "tag" | "disable";
+  lastScannedAt: string | null;
+};
+
+export type CatalogAction =
+  | { action: "scan" }
+  | { action: "settings"; settings: Partial<CatalogSettings> }
+  | { action: "create"; scope: "global" | "workspace"; workspacePath?: string; name: string; description: string; developerInstructions: string; tags?: string[] }
+  | { action: "register"; sourcePath: string }
+  | { action: "unregister"; sourcePath: string }
+  | { action: "import"; sourcePath: string; scope: "global" | "workspace"; workspacePath?: string }
+  | { action: "tags"; sourcePath: string; tags: string[] }
+  | { action: "toggle"; sourcePath: string; enabled: boolean }
+  | { action: "rename"; sourcePath: string; name: string }
+  | { action: "resolve-collision"; sourcePath: string; resolution: "tag" | "rename" | "disable"; tags?: string[]; name?: string };
+
+export type AgentMetric = {
+  agent: string;
+  runCount: number;
+  trackedActiveSeconds: number;
+  activeInstances: number;
+  lastActivityAt: string | null;
+  lastActivityMessage: string | null;
+};
+
+export type AgentPresentation = {
+  scope?: CatalogAgent["scope"];
+  tags: string[];
+  sourcePath?: string;
+  unresolved: boolean;
+  candidates?: Array<Pick<CatalogAgent, "scope" | "sourcePath" | "tags">>;
 };
 
 export type GuildStatistics = {
@@ -58,7 +108,7 @@ export type GuildStatistics = {
   completionRate: number;
   averageDurationSeconds: number;
   totalRuntimeSeconds: number;
-  mostUsedAgent: AgentId | null;
+  mostUsedAgent: string | null;
   mostUsedAgentRuns: number;
 };
 
@@ -70,7 +120,11 @@ export type DashboardPayload = {
   events: StoredGuildEvent[];
   recentEvents: StoredGuildEvent[];
   agentActivities: GuildAgentActivity[];
-  agentRunCounts: Record<AgentId, number>;
+  agentRunCounts: Record<string, number>;
+  agentMetrics: Record<string, AgentMetric>;
+  agentCatalog: CatalogAgent[];
+  agentCatalogSettings: CatalogSettings;
+  agentWorkspacePaths: string[];
   statistics: GuildStatistics;
   serverTime: string;
 };

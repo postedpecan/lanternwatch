@@ -23,6 +23,7 @@ $NodeExecutable = if ($nodeCommand.Source) { $nodeCommand.Source } else { $nodeC
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $hooksPath = Join-Path $CodexRoot 'hooks.json'
 $configPath = Join-Path $CodexRoot 'config.toml'
+$launcherPath = Join-Path $CodexRoot 'LanternWatch\guild-lifecycle-hook.cmd'
 $lifecycleScript = Join-Path $projectRoot 'scripts\guild-lifecycle-hook.mjs'
 $mergeScript = Join-Path $projectRoot 'scripts\merge-hooks.mjs'
 $backupRoot = Join-Path $CodexRoot '.lanternwatch-backups'
@@ -39,6 +40,9 @@ Copy-Item -LiteralPath $configPath -Destination (Join-Path $backupDirectory 'con
 if (Test-Path -LiteralPath $hooksPath) {
   Copy-Item -LiteralPath $hooksPath -Destination (Join-Path $backupDirectory 'hooks.json')
 }
+if (Test-Path -LiteralPath $launcherPath) {
+  Copy-Item -LiteralPath $launcherPath -Destination (Join-Path $backupDirectory 'guild-lifecycle-hook.cmd')
+}
 
 try {
   $mergeOutput = & $NodeExecutable $mergeScript $hooksPath $lifecycleScript $NodeExecutable --report
@@ -47,7 +51,7 @@ try {
 
   $config = [IO.File]::ReadAllText($configPath)
   $removedTrustRecords = 0
-  foreach ($trustKey in $mergeReport.trustKeys) {
+  foreach ($trustKey in $mergeReport.trustKeysToReset) {
     $escapedKey = [regex]::Escape([string]$trustKey)
     $pattern = "(?ms)^\[hooks\.state\.'$escapedKey'\]\r?\n.*?(?=^\[|\z)"
     $updated = [regex]::Replace($config, $pattern, '')
@@ -70,6 +74,12 @@ try {
   $hooksBackup = Join-Path $backupDirectory 'hooks.json'
   if (Test-Path -LiteralPath $hooksBackup) {
     Copy-Item -LiteralPath $hooksBackup -Destination $hooksPath -Force
+  }
+  $launcherBackup = Join-Path $backupDirectory 'guild-lifecycle-hook.cmd'
+  if (Test-Path -LiteralPath $launcherBackup) {
+    Copy-Item -LiteralPath $launcherBackup -Destination $launcherPath -Force
+  } elseif (Test-Path -LiteralPath $launcherPath) {
+    Remove-Item -LiteralPath $launcherPath -Force
   }
   throw
 }

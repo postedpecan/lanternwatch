@@ -23,12 +23,15 @@ function runHook(script, payload, environment) {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    let stdout = "";
     let stderr = "";
+    child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (code === 0) resolve();
+      if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`Lifecycle hook exited ${code}: ${stderr.trim().slice(0, 300)}`));
     });
     child.stdin.end(JSON.stringify(payload));
@@ -68,6 +71,7 @@ const environment = {
   LANTERNWATCH_DISABLE_HEARTBEAT: "1",
 };
 const basePayload = { session_id: sessionId, turn_id: turnId, cwd: projectPath };
+const agentId = `${sessionId}-platform-engineer`;
 
 const before = await readHealth(apiUrl);
 const serverRoot = path.resolve(String(before.payload.storageRootPath || ""));
@@ -75,8 +79,46 @@ if (serverRoot.toLocaleLowerCase() !== storageRoot.toLocaleLowerCase()) {
   throw new Error(`Refusing lifecycle simulation: the server health root does not match the fixture root (${serverRoot}).`);
 }
 
-await runHook(hookScript, { ...basePayload, hook_event_name: "UserPromptSubmit" }, environment);
-await runHook(hookScript, { ...basePayload, hook_event_name: "Stop" }, environment);
+const startResult = await runHook(hookScript, { ...basePayload, hook_event_name: "UserPromptSubmit" }, environment);
+const subagentStartResult = await runHook(hookScript, {
+  ...basePayload,
+  hook_event_name: "SubagentStart",
+  agent_id: agentId,
+  agent_type: "platform-engineer",
+  permission_mode: "default",
+}, environment);
+const dashboardUrl = new URL(apiUrl);
+dashboardUrl.pathname = dashboardUrl.pathname.replace(/\/events\/?$/, "/dashboard");
+const activeResponse = await fetch(dashboardUrl, { signal: AbortSignal.timeout(2000) });
+if (!activeResponse.ok) throw new Error(`Lanternwatch dashboard check returned ${activeResponse.status}.`);
+const activeDashboard = await activeResponse.json();
+const activeAgent = Array.isArray(activeDashboard.agentActivities)
+  ? activeDashboard.agentActivities.find((activity) => activity.agentInstanceId === agentId)
+  : undefined;
+if (!activeAgent || activeAgent.agent !== "platform-engineer" || activeAgent.status !== "working") {
+  throw new Error("SubagentStart did not appear as an active Platform Engineer instance.");
+}
+const subagentStopResult = await runHook(hookScript, {
+  ...basePayload,
+  hook_event_name: "SubagentStop",
+  agent_id: agentId,
+  agent_type: "platform-engineer",
+  agent_transcript_path: "fixture-transcript.jsonl",
+  stop_hook_active: false,
+  last_assistant_message: "fixture complete",
+}, environment);
+const stopResult = await runHook(hookScript, {
+  ...basePayload,
+  hook_event_name: "Stop",
+  stop_hook_active: false,
+  last_assistant_message: "fixture complete",
+}, environment);
+for (const result of [startResult, subagentStartResult, subagentStopResult, stopResult]) {
+  const response = JSON.parse(result.stdout);
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new Error("Lifecycle hook did not emit a valid JSON object on stdout.");
+  }
+}
 
 const receiptPath = path.join(storageRoot, "logs", "hook.jsonl");
 const receipts = readFileSync(receiptPath, "utf8")
@@ -89,11 +131,21 @@ const after = await readHealth(apiUrl);
 if (after.payload.hookLogStatus !== "ok" || after.payload.lastHookEvent !== "Stop" || after.payload.lastHookSource !== "codex") {
   throw new Error(`Lifecycle health did not clear after simulation (status ${after.payload.hookLogStatus || "unknown"}).`);
 }
+const completedResponse = await fetch(dashboardUrl, { signal: AbortSignal.timeout(2000) });
+if (!completedResponse.ok) throw new Error(`Lanternwatch completion check returned ${completedResponse.status}.`);
+const completedDashboard = await completedResponse.json();
+if (Array.isArray(completedDashboard.agentActivities)
+    && completedDashboard.agentActivities.some((activity) => activity.agentInstanceId === agentId)) {
+  throw new Error("SubagentStop did not remove the completed Platform Engineer instance from live activity.");
+}
 process.stdout.write(`${JSON.stringify({
   storageRoot,
   databasePath: environment.LANTERNWATCH_DB_PATH,
   receiptPath,
   receiptCount: receipts.length,
+  activeAgentVerified: true,
+  stoppedAgentVerified: true,
+  agentId,
   sessionId,
   turnId,
   apiUrl,

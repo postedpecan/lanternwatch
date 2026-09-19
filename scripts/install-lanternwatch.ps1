@@ -10,19 +10,40 @@ $ErrorActionPreference = 'Stop'
 
 $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
 if ([string]::IsNullOrWhiteSpace($userHome)) { throw 'Unable to resolve the current user profile directory.' }
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$environmentFile = Join-Path $projectRoot '.env.local'
+
+function Get-ProjectEnvironmentValue([string]$Name) {
+  if (-not (Test-Path -LiteralPath $environmentFile)) { return $null }
+  foreach ($line in Get-Content -LiteralPath $environmentFile -Encoding UTF8) {
+    if ($line -match ('^\s*' + [regex]::Escape($Name) + '\s*=\s*(.*)\s*$')) {
+      $value = $Matches[1].Trim()
+      if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+        $value = $value.Substring(1, $value.Length - 2)
+      }
+      return $value
+    }
+  }
+  return $null
+}
 
 if ([string]::IsNullOrWhiteSpace($CodexRoot)) {
   $CodexRoot = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $userHome '.codex' }
 }
-if ([string]::IsNullOrWhiteSpace($DatabasePath) -and $env:LANTERNWATCH_DB_PATH) { $DatabasePath = $env:LANTERNWATCH_DB_PATH }
-if ([string]::IsNullOrWhiteSpace($StorageRoot) -and $env:LANTERNWATCH_STORAGE_ROOT) { $StorageRoot = $env:LANTERNWATCH_STORAGE_ROOT }
+if ([string]::IsNullOrWhiteSpace($DatabasePath)) {
+  $DatabasePath = if ($env:LANTERNWATCH_DB_PATH) { $env:LANTERNWATCH_DB_PATH } else { Get-ProjectEnvironmentValue 'LANTERNWATCH_DB_PATH' }
+}
+if ([string]::IsNullOrWhiteSpace($StorageRoot)) {
+  $StorageRoot = if ($env:LANTERNWATCH_STORAGE_ROOT) { $env:LANTERNWATCH_STORAGE_ROOT } else { Get-ProjectEnvironmentValue 'LANTERNWATCH_STORAGE_ROOT' }
+}
 if ([string]::IsNullOrWhiteSpace($StorageRoot)) {
   $StorageRoot = if ($DatabasePath) { Split-Path -Parent $DatabasePath } else { Join-Path $userHome '.lanternwatch' }
 }
 if ([string]::IsNullOrWhiteSpace($DatabasePath)) { $DatabasePath = Join-Path $StorageRoot 'guild.db' }
 if ([string]::IsNullOrWhiteSpace($VaultPath)) {
-  $VaultPath = if ($env:LANTERNWATCH_VAULT_PATH) { $env:LANTERNWATCH_VAULT_PATH } else { '' }
+  $VaultPath = if ($env:LANTERNWATCH_VAULT_PATH) { $env:LANTERNWATCH_VAULT_PATH } else { Get-ProjectEnvironmentValue 'LANTERNWATCH_VAULT_PATH' }
 }
+if ($null -eq $VaultPath) { $VaultPath = '' }
 
 $nodeCommand = if ([string]::IsNullOrWhiteSpace($NodeExecutable)) {
   Get-Command node -ErrorAction SilentlyContinue
@@ -34,19 +55,17 @@ $nodeCommand = if ([string]::IsNullOrWhiteSpace($NodeExecutable)) {
 if (-not $nodeCommand) { throw 'node.exe was not found on PATH; install Node.js before running this installer.' }
 $NodeExecutable = if ($nodeCommand.Source) { $nodeCommand.Source } else { $nodeCommand.FullName }
 
-$projectRoot = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $CodexRoot 'config.toml'
 $agentsPath = Join-Path $CodexRoot 'AGENTS.md'
 $hooksPath = Join-Path $CodexRoot 'hooks.json'
+$launcherPath = Join-Path $CodexRoot 'LanternWatch\guild-lifecycle-hook.cmd'
 $backupDirectory = Join-Path $CodexRoot '.lanternwatch-backups'
-$notifierConfigPath = Join-Path $CodexRoot 'lanternwatch-notifier.json'
 $runtimeConfigPath = if ($env:LANTERNWATCH_CONFIG_PATH) { $env:LANTERNWATCH_CONFIG_PATH } else { Join-Path (Join-Path $userHome '.lanternwatch') 'config.json' }
-$notifyScript = Join-Path $projectRoot 'scripts\guild-notify.mjs'
 $reportScript = Join-Path $projectRoot 'scripts\guild-report.mjs'
 $lifecycleScript = Join-Path $projectRoot 'scripts\guild-lifecycle-hook.mjs'
 $mergeScript = Join-Path $projectRoot 'scripts\merge-hooks.mjs'
 
-foreach ($requiredPath in @($notifyScript, $reportScript, $lifecycleScript, $mergeScript)) {
+foreach ($requiredPath in @($reportScript, $lifecycleScript, $mergeScript)) {
   if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required path not found: $requiredPath" }
 }
 
@@ -59,32 +78,11 @@ foreach ($backup in @(
   @{ Path = $configPath; Name = "config-$timestamp.toml" },
   @{ Path = $agentsPath; Name = "AGENTS-$timestamp.md" },
   @{ Path = $hooksPath; Name = "hooks-$timestamp.json" },
-  @{ Path = $notifierConfigPath; Name = "notifier-$timestamp.json" },
+  @{ Path = $launcherPath; Name = "guild-lifecycle-hook-$timestamp.cmd" },
   @{ Path = $runtimeConfigPath; Name = "runtime-$timestamp.json" }
 )) {
   if (Test-Path -LiteralPath $backup.Path) { Copy-Item -LiteralPath $backup.Path -Destination (Join-Path $backupDirectory $backup.Name) }
 }
-
-$config = if (Test-Path -LiteralPath $configPath) { Get-Content -Raw -LiteralPath $configPath -Encoding UTF8 } else { '' }
-$existingNotify = [regex]::Match($config, '(?m)^\s*notify\s*=\s*\[(.*?)\]\s*$')
-if ($existingNotify.Success -and $existingNotify.Value -notmatch 'guild-notify\.mjs') {
-  $notifierTokens = @([regex]::Matches($existingNotify.Groups[1].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object { $_.Value | ConvertFrom-Json })
-  if ($notifierTokens.Count -gt 0) {
-    $notifierConfiguration = [ordered]@{ command = $notifierTokens[0]; args = @($notifierTokens | Select-Object -Skip 1) }
-    [IO.File]::WriteAllText($notifierConfigPath, ($notifierConfiguration | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-  }
-}
-
-$escapedNode = $NodeExecutable -replace '\\', '\\'
-$escapedNotify = $notifyScript -replace '\\', '\\'
-$escapedNotifierConfig = $notifierConfigPath -replace '\\', '\\'
-$notifyLine = 'notify = [ "' + $escapedNode + '", "' + $escapedNotify + '", "--notifier-config", "' + $escapedNotifierConfig + '" ]'
-if ($config -match '(?m)^\s*notify\s*=.*$') {
-  $config = [regex]::Replace($config, '(?m)^\s*notify\s*=.*$', $notifyLine, 1)
-} else {
-  $config = $notifyLine + [Environment]::NewLine + $config
-}
-[IO.File]::WriteAllText($configPath, $config, [Text.UTF8Encoding]::new($false))
 
 & $NodeExecutable $mergeScript $hooksPath $lifecycleScript $NodeExecutable
 if ($LASTEXITCODE -ne 0) { throw "Hook merge failed with exit code $LASTEXITCODE" }
@@ -101,9 +99,12 @@ for every workspace. Reporting failure must never block the actual task.
 
 - Use ``$reportScript`` manually only when a named Lanternwatch role must be
   recorded more precisely than the automatic subagent type permits.
-- Use only the supported role ids: herald, guildmaster, steward, pathfinder,
-  courier, archivist, genealogist, hookwright, interface-weaver, ledgerkeeper,
-  prover, chronicler, counselor, assayer.
+- Use only the supported role ids: business-analyst, program-manager,
+  operations-coordinator, technical-researcher, market-intelligence-analyst,
+  systems-analyst, change-management-analyst, platform-engineer,
+  frontend-engineer, data-engineer, qa-engineer, technical-writer,
+  strategy-consultant, compliance-reviewer. Legacy fantasy ids are accepted
+  as input aliases, but Lanternwatch emits and stores only these role ids.
 - Never place secrets, raw prompts, private file contents, or command lines in
   a manual message.
 $endMarker
@@ -118,7 +119,7 @@ $runtimeConfiguration = [ordered]@{ storageRoot = $StorageRoot; databasePath = $
 [IO.File]::WriteAllText($runtimeConfigPath, ($runtimeConfiguration | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 
 $env:LANTERNWATCH_CONFIG_PATH = $runtimeConfigPath
-& $NodeExecutable $reportScript --quiet --event-id lanternwatch-setup-complete --status complete --agent guildmaster --run-id lanternwatch-setup --project $projectRoot --project-name Lanternwatch --quest 'Install local agent activity system' --message 'SQLite, Local API, and activity export storage initialized.' --run-complete
+& $NodeExecutable $reportScript --quiet --event-id lanternwatch-setup-complete --status complete --agent program-manager --run-id lanternwatch-setup --project $projectRoot --project-name Lanternwatch --quest 'Install local agent activity system' --message 'SQLite, Local API, and activity export storage initialized.' --run-complete
 
 Write-Output 'Lanternwatch installed.'
 Write-Output "Database: $DatabasePath"
@@ -126,5 +127,6 @@ if ($VaultPath) { Write-Output "Activity exports: $VaultPath\Guild Activity" } e
 Write-Output "Runtime config: $runtimeConfigPath"
 Write-Output "Hooks: $hooksPath"
 Write-Output "Backups: $backupDirectory"
+Write-Output 'Existing Codex notifier configuration was preserved; live status uses lifecycle hooks rather than the completion-only notify fallback.'
 Write-Output 'In a terminal, run codex and use /hooks in that CLI session to review, trust, and enable each Lanternwatch hook.'
 Write-Output 'The desktop and IDE chat composers do not provide /hooks. Fully exit their host processes, reopen Codex, and start a fresh chat.'

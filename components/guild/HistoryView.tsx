@@ -1,9 +1,16 @@
 "use client";
 
 import { AGENTS } from "@/lib/guild-data";
-import type { GuildProject, GuildRun, GuildStatistics, StoredGuildEvent } from "@/lib/guild-contract";
+import type { AgentPresentation, GuildProject, GuildRun, GuildStatistics, StoredGuildEvent } from "@/lib/guild-contract";
 import { formatElapsed, formatMoment, titleCase } from "@/lib/guild-format";
 import { useGuildData } from "@/components/guild/GuildDataContext";
+import { needsDelegationWarning } from "@/components/guild/delegation-warning";
+
+function ActivityTags({ presentation }: { presentation?: AgentPresentation }) {
+  if (!presentation) return null;
+  if (presentation.unresolved) return <span className="agent-tags unresolved" title="More than one enabled definition has this name.">Source unresolved</span>;
+  return <span className="agent-tags">{presentation.scope && <i>{presentation.scope}</i>}{presentation.tags.map((tag) => <i key={tag}>{tag}</i>)}</span>;
+}
 
 function StatisticsOverview({ statistics, scopeName }: { statistics: GuildStatistics; scopeName: string }) {
   const favorite = statistics.mostUsedAgent
@@ -16,7 +23,7 @@ function StatisticsOverview({ statistics, scopeName }: { statistics: GuildStatis
         <article className="stat-card"><span>Total runs</span><strong>{statistics.totalRuns}</strong><small>{statistics.activeRuns} active · {statistics.stalledRuns} stalled</small></article>
         <article className="stat-card"><span>Completion rate</span><strong>{statistics.completionRate}%</strong><small>{statistics.completedRuns} completed · {statistics.interruptedRuns} interrupted</small></article>
         <article className="stat-card"><span>Average runtime</span><strong>{formatElapsed(statistics.averageDurationSeconds)}</strong><small>{formatElapsed(statistics.totalRuntimeSeconds)} recorded total</small></article>
-        <article className="stat-card"><span>Most active role</span><strong className="stat-name">{favorite}</strong><small>{statistics.mostUsedAgentRuns} run{statistics.mostUsedAgentRuns === 1 ? "" : "s"}</small></article>
+        <article className="stat-card"><span>Most active agent</span><strong className="stat-name">{favorite}</strong><small>{statistics.mostUsedAgentRuns} run{statistics.mostUsedAgentRuns === 1 ? "" : "s"}</small></article>
       </div>
     </section>
   );
@@ -31,6 +38,7 @@ function RunDetailsPanel({ run, events, runs, projects, selectedRunId, onSelectR
   onSelectRun: (runId: string) => void;
 }) {
   const participants = [...new Set(events.map((event) => event.agent))];
+  const delegationWarning = needsDelegationWarning(run, events);
   const projectNameFor = (projectId: string) => projects.find((project) => project.id === projectId)?.name ?? "Unknown project";
   const runProjectName = run ? projectNameFor(run.projectId) : null;
   return (
@@ -50,8 +58,9 @@ function RunDetailsPanel({ run, events, runs, projects, selectedRunId, onSelectR
             <div><span>Activity</span><strong>{events.length} events · {participants.length} roles</strong></div>
           </div>
           <div className="run-identity"><span>Run ID</span><code>{run.id}</code></div>
+          {delegationWarning && <p className="delegation-warning" role="status"><strong>No delegated specialist recorded.</strong> This terminal run has no recorded lifecycle event from an agent other than Program Manager. LanternWatch cannot tell whether a specialist worked without a recorded specialist event.</p>}
           <div className="event-trail" role="list" aria-label="Selected run event trail">
-            {events.map((event) => <div className={`event-row ${event.status}`} role="listitem" key={event.eventId}><time>{formatElapsed(event.elapsedSeconds)}</time><strong>{AGENTS.find((agent) => agent.id === event.agent)?.name ?? titleCase(event.agent)}</strong><span>{event.message}</span><i>{titleCase(event.status)}</i></div>)}
+            {events.map((event) => <div className={`event-row ${event.status}`} role="listitem" key={event.eventId}><time>{formatElapsed(event.elapsedSeconds)}</time><strong>{AGENTS.find((agent) => agent.id === event.agent)?.name ?? titleCase(event.agent)} <ActivityTags presentation={event.presentation} /></strong><span>{event.message}</span><i>{titleCase(event.status)}</i></div>)}
           </div>
         </>}
       </article>

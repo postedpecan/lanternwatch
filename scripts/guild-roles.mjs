@@ -1,63 +1,80 @@
 export const AGENT_IDS = Object.freeze([
-  "herald",
-  "guildmaster",
-  "steward",
-  "pathfinder",
-  "courier",
-  "archivist",
-  "genealogist",
-  "hookwright",
-  "interface-weaver",
-  "ledgerkeeper",
-  "prover",
-  "chronicler",
-  "counselor",
-  "assayer",
+  "business-analyst",
+  "program-manager",
+  "operations-coordinator",
+  "technical-researcher",
+  "market-intelligence-analyst",
+  "systems-analyst",
+  "change-management-analyst",
+  "platform-engineer",
+  "frontend-engineer",
+  "data-engineer",
+  "qa-engineer",
+  "technical-writer",
+  "strategy-consultant",
+  "compliance-reviewer",
 ]);
 
 export const AGENT_ID_SET = new Set(AGENT_IDS);
 
-// Public company titles are aliases only. Canonical lifecycle, API, receipt,
-// and database identities deliberately remain the original IDs so existing
-// hook installations and historical data stay compatible.
+// Canonical lifecycle IDs are the normalized company-title slugs. Historical
+// fantasy IDs remain accepted inputs through LEGACY_AGENT_ID_ALIASES below,
+// but every resolver output uses one of these canonical IDs.
 export const COMPANY_ROLE_TITLES = Object.freeze({
-  herald: "Business Analyst",
-  guildmaster: "Program Manager",
-  steward: "Operations Coordinator",
-  pathfinder: "Technical Researcher",
-  courier: "Market Intelligence Analyst",
-  archivist: "Systems Analyst",
-  genealogist: "Change Management Analyst",
-  hookwright: "Platform Engineer",
-  "interface-weaver": "Frontend Engineer",
-  ledgerkeeper: "Data Engineer",
-  prover: "QA Engineer",
-  chronicler: "Technical Writer",
-  counselor: "Strategy Consultant",
-  assayer: "Compliance Reviewer",
+  "business-analyst": "Business Analyst",
+  "program-manager": "Program Manager",
+  "operations-coordinator": "Operations Coordinator",
+  "technical-researcher": "Technical Researcher",
+  "market-intelligence-analyst": "Market Intelligence Analyst",
+  "systems-analyst": "Systems Analyst",
+  "change-management-analyst": "Change Management Analyst",
+  "platform-engineer": "Platform Engineer",
+  "frontend-engineer": "Frontend Engineer",
+  "data-engineer": "Data Engineer",
+  "qa-engineer": "QA Engineer",
+  "technical-writer": "Technical Writer",
+  "strategy-consultant": "Strategy Consultant",
+  "compliance-reviewer": "Compliance Reviewer",
 });
 
 export const COMPANY_ROLE_ALIASES = Object.freeze({
-  "business-analyst": "herald",
-  "program-manager": "guildmaster",
-  "operations-coordinator": "steward",
-  "technical-researcher": "pathfinder",
-  "market-intelligence-analyst": "courier",
-  "systems-analyst": "archivist",
-  "change-management-analyst": "genealogist",
-  "platform-engineer": "hookwright",
-  "frontend-engineer": "interface-weaver",
-  "data-engineer": "ledgerkeeper",
-  "qa-engineer": "prover",
-  "technical-writer": "chronicler",
-  "strategy-consultant": "counselor",
-  "compliance-reviewer": "assayer",
+  "business-analyst": "business-analyst",
+  "program-manager": "program-manager",
+  "operations-coordinator": "operations-coordinator",
+  "technical-researcher": "technical-researcher",
+  "market-intelligence-analyst": "market-intelligence-analyst",
+  "systems-analyst": "systems-analyst",
+  "change-management-analyst": "change-management-analyst",
+  "platform-engineer": "platform-engineer",
+  "frontend-engineer": "frontend-engineer",
+  "data-engineer": "data-engineer",
+  "qa-engineer": "qa-engineer",
+  "technical-writer": "technical-writer",
+  "strategy-consultant": "strategy-consultant",
+  "compliance-reviewer": "compliance-reviewer",
+});
+
+export const LEGACY_AGENT_ID_ALIASES = Object.freeze({
+  herald: "business-analyst",
+  guildmaster: "program-manager",
+  steward: "operations-coordinator",
+  pathfinder: "technical-researcher",
+  courier: "market-intelligence-analyst",
+  archivist: "systems-analyst",
+  genealogist: "change-management-analyst",
+  hookwright: "platform-engineer",
+  "interface-weaver": "frontend-engineer",
+  ledgerkeeper: "data-engineer",
+  prover: "qa-engineer",
+  chronicler: "technical-writer",
+  counselor: "strategy-consultant",
+  assayer: "compliance-reviewer",
 });
 
 // Claude Code's built-in subagent types are a known, enumerable set (unlike
 // arbitrary custom/unclassified strings) but none of them textually contain a
 // guild role id, so they would otherwise fall through the substring loop
-// below and silently collapse to the "archivist" default. Map each one
+// below and silently collapse to the Systems Analyst default. Map each one
 // explicitly instead:
 //   - "general-purpose": open-ended multi-step research/task agent -> the
 //     Archivist's "reads the codebase/records as they are now" charter is the
@@ -73,11 +90,11 @@ export const COMPANY_ROLE_ALIASES = Object.freeze({
 //   - "statusline-setup": configures a UI/interface element -> Interface
 //     Weaver, who owns interface and presentation work.
 const CLAUDE_CODE_BUILTIN_ROLES = Object.freeze({
-  "general-purpose": "archivist",
-  explore: "archivist",
-  plan: "guildmaster",
-  "claude-code-guide": "pathfinder",
-  "statusline-setup": "interface-weaver",
+  "general-purpose": "systems-analyst",
+  explore: "systems-analyst",
+  plan: "program-manager",
+  "claude-code-guide": "technical-researcher",
+  "statusline-setup": "frontend-engineer",
 });
 
 function normalizedRoleName(type) {
@@ -88,7 +105,7 @@ function normalizedRoleName(type) {
     .replace(/^-+|-+$/g, "");
 }
 
-// Returns a canonical legacy ID only for an explicit old ID or company-title
+// Returns a canonical company-title ID for a current ID, legacy ID, or title
 // alias. Substrings are intentional: hosts commonly prefix task names with a
 // path such as /root/frontend_engineer_dashboard.
 export function canonicalAgentId(type) {
@@ -96,7 +113,7 @@ export function canonicalAgentId(type) {
   for (const role of AGENT_IDS) {
     if (value.includes(role)) return role;
   }
-  for (const [alias, role] of Object.entries(COMPANY_ROLE_ALIASES)) {
+  for (const [alias, role] of Object.entries(LEGACY_AGENT_ID_ALIASES)) {
     if (value.includes(alias)) return role;
   }
   return undefined;
@@ -109,7 +126,7 @@ export function companyTitleForAgent(type) {
 
 // Resolves an agent_type string to a role plus whether the match was a
 // deliberate rule (a Claude Code builtin, a role-id substring, or a
-// research/news keyword) or the unconditional "archivist" default at the
+// research/news keyword) or the unconditional Systems Analyst default at the
 // bottom, which is a low-confidence guess rather than a real identification.
 // Callers that need to tell those apart (e.g. deciding whether to auto-report
 // to the dashboard) should use this instead of re-deriving the distinction.
@@ -120,9 +137,9 @@ export function resolveAgentRole(type) {
   }
   const canonicalRole = canonicalAgentId(value);
   if (canonicalRole) return { role: canonicalRole, matched: true };
-  if (value.includes("research") || value.includes("technical")) return { role: "pathfinder", matched: true };
-  if (value.includes("news")) return { role: "courier", matched: true };
-  return { role: "archivist", matched: false };
+  if (value.includes("research") || value.includes("technical")) return { role: "technical-researcher", matched: true };
+  if (value.includes("news")) return { role: "market-intelligence-analyst", matched: true };
+  return { role: "systems-analyst", matched: false };
 }
 
 // Ambiguous means resolveAgentRole() had to fall all the way through to its

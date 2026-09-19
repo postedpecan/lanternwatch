@@ -14,6 +14,7 @@ import {
 import {
   AGENTS,
   AGENT_IDS,
+  canonicalAgentId,
   DEFAULT_QUEST,
   STEPS,
   type AgentId,
@@ -21,7 +22,10 @@ import {
   type RoomStatus,
 } from "@/lib/guild-data";
 import type {
+  AgentMetric,
   DashboardPayload,
+  CatalogAgent,
+  CatalogSettings,
   GuildAgentActivity,
   GuildProject,
   GuildRun,
@@ -69,13 +73,13 @@ export type GuildState = {
   delivered: boolean;
   currentStep: number;
   elapsed: number;
-  roomStatuses: Record<AgentId, RoomStatus>;
-  agentTimings: Record<AgentId, AgentTiming>;
+  roomStatuses: Record<string, RoomStatus>;
+  agentTimings: Record<string, AgentTiming>;
   timelineStatuses: TimelineStatus[];
   timelineTimes: Array<number | null>;
   detail: { title: string; text: string; tag: string };
   logs: LogEntry[];
-  activeInstances: Record<string, AgentId>;
+  activeInstances: Record<string, string>;
 };
 
 type Action =
@@ -90,7 +94,7 @@ type Action =
 
 type GuildApi = {
   agents: AgentId[];
-  push: (event: GuildEvent) => boolean;
+  push: (event: Omit<GuildEvent, "agent" | "from"> & { agent: string; from?: string }) => boolean;
   start: (quest?: string) => void;
 };
 
@@ -100,13 +104,13 @@ declare global {
   }
 }
 
-const waitingRooms = (): Record<AgentId, RoomStatus> =>
-  Object.fromEntries(AGENT_IDS.map((id) => [id, "waiting"])) as Record<AgentId, RoomStatus>;
+const waitingRooms = (): Record<string, RoomStatus> =>
+  Object.fromEntries(AGENT_IDS.map((id) => [id, "waiting"]));
 
-const emptyAgentTimings = (): Record<AgentId, AgentTiming> =>
+const emptyAgentTimings = (): Record<string, AgentTiming> =>
   Object.fromEntries(
     AGENT_IDS.map((id) => [id, { startedAt: null, duration: 0 }]),
-  ) as Record<AgentId, AgentTiming>;
+  );
 
 // Demo walkthrough timing. Kept as the single source of truth for how long
 // each simulated step takes, so the live view's ETA can be computed exactly
@@ -146,14 +150,14 @@ function addLog(state: GuildState, agent: string, message: string, elapsed: numb
 
 function transitionTimings(
   state: GuildState,
-  nextStatuses: Record<AgentId, RoomStatus>,
+  nextStatuses: Record<string, RoomStatus>,
   elapsed: number,
 ) {
   return Object.fromEntries(
     AGENT_IDS.map((id) => {
       const previousStatus = state.roomStatuses[id];
       const nextStatus = nextStatuses[id];
-      const timing = state.agentTimings[id];
+      const timing = state.agentTimings[id] ?? { startedAt: null, duration: 0 };
 
       if (nextStatus === "working" && previousStatus !== "working") {
         return [id, { startedAt: elapsed, duration: timing.duration }];
@@ -165,7 +169,7 @@ function transitionTimings(
 
       return [id, timing];
     }),
-  ) as Record<AgentId, AgentTiming>;
+  );
 }
 
 function reducer(state: GuildState, action: Action): GuildState {
@@ -210,7 +214,7 @@ function reducer(state: GuildState, action: Action): GuildState {
       };
     }
     case "DELIVERY": {
-      const roomStatuses = { ...state.roomStatuses, assayer: "complete" as RoomStatus };
+      const roomStatuses = { ...state.roomStatuses, "compliance-reviewer": "complete" as RoomStatus };
       return {
         ...state,
         roomStatuses,
@@ -223,7 +227,7 @@ function reducer(state: GuildState, action: Action): GuildState {
       };
     }
     case "FINISH": {
-      const roomStatuses = { ...state.roomStatuses, assayer: "complete" as RoomStatus };
+      const roomStatuses = { ...state.roomStatuses, "compliance-reviewer": "complete" as RoomStatus };
       return {
         ...state,
         running: false,
@@ -269,7 +273,7 @@ function reducer(state: GuildState, action: Action): GuildState {
         ...state,
         quest: action.event.quest ?? state.quest,
         running: hasActiveWork,
-        delivered: action.event.agent === "assayer" && eventStatus === "complete",
+        delivered: action.event.agent === "compliance-reviewer" && eventStatus === "complete",
         currentStep: Math.max(state.currentStep, action.index),
         roomStatuses,
         agentTimings: transitionTimings(state, roomStatuses, action.elapsed),
@@ -298,7 +302,7 @@ function hydrateState(payload: DashboardPayload): GuildState {
       from: storedEvent.from ?? undefined,
       agentInstanceId: storedEvent.agentInstanceId ?? undefined,
     };
-    const index = STEPS.findIndex((step) => step.agents.includes(event.agent));
+    const index = STEPS.findIndex((step) => step.agents.includes(event.agent as AgentId));
     hydrated = reducer(hydrated, {
       type: "EXTERNAL",
       event,
@@ -327,7 +331,7 @@ function hydrateState(payload: DashboardPayload): GuildState {
 }
 
 export function runtimeFor(state: GuildState, id: AgentId) {
-  const timing = state.agentTimings[id];
+  const timing = state.agentTimings[id] ?? { startedAt: null, duration: 0 };
   if (state.roomStatuses[id] === "working" && timing.startedAt !== null) {
     return timing.duration + state.elapsed - timing.startedAt;
   }
@@ -353,7 +357,11 @@ type GuildDataContextValue = {
   recentEvents: StoredGuildEvent[];
   agentActivities: GuildAgentActivity[];
   statistics: GuildStatistics;
-  agentRunCounts: Record<AgentId, number>;
+  agentRunCounts: Record<string, number>;
+  agentMetrics: Record<string, AgentMetric>;
+  agentCatalog: CatalogAgent[];
+  agentCatalogSettings: CatalogSettings;
+  agentWorkspacePaths: string[];
   storageConnected: boolean;
   healthApiConnected: boolean;
   storageHealth: GuildStorageHealth | null;
@@ -386,9 +394,13 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
   const [recentEvents, setRecentEvents] = useState<StoredGuildEvent[]>([]);
   const [agentActivities, setAgentActivities] = useState<GuildAgentActivity[]>([]);
   const [statistics, setStatistics] = useState<GuildStatistics>(emptyStatistics);
-  const [agentRunCounts, setAgentRunCounts] = useState<Record<AgentId, number>>(
+  const [agentRunCounts, setAgentRunCounts] = useState<Record<string, number>>(
     () => Object.fromEntries(AGENT_IDS.map((agent) => [agent, 0])) as Record<AgentId, number>,
   );
+  const [agentMetrics, setAgentMetrics] = useState<Record<string, AgentMetric>>({});
+  const [agentCatalog, setAgentCatalog] = useState<CatalogAgent[]>([]);
+  const [agentCatalogSettings, setAgentCatalogSettings] = useState<CatalogSettings>({ discoveryMode: "manual", collisionPolicy: "rename", lastScannedAt: null });
+  const [agentWorkspacePaths, setAgentWorkspacePaths] = useState<string[]>([]);
   const [storageConnected, setStorageConnected] = useState(false);
   const [healthApiConnected, setHealthApiConnected] = useState(false);
   const [storageHealth, setStorageHealth] = useState<GuildStorageHealth | null>(null);
@@ -443,6 +455,10 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
           setAgentActivities(payload.agentActivities);
           setStatistics(payload.statistics);
           setAgentRunCounts(payload.agentRunCounts);
+          setAgentMetrics(payload.agentMetrics);
+          setAgentCatalog(payload.agentCatalog);
+          setAgentCatalogSettings(payload.agentCatalogSettings);
+          setAgentWorkspacePaths(payload.agentWorkspacePaths);
           setStorageConnected(true);
           if (selectedProjectId && !payload.projects.some((project) => project.id === selectedProjectId)) {
             setSelectedProjectId("");
@@ -519,13 +535,17 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
     if (runId === runIdRef.current) setMode("live");
   }, [draft, sleep]);
 
-  const pushEvent = useCallback((event: GuildEvent) => {
-    if (!event || !AGENT_IDS.includes(event.agent)) return false;
+  const pushEvent = useCallback((event: Omit<GuildEvent, "agent" | "from"> & { agent: string; from?: string }) => {
+    if (!event) return false;
+    const agent = canonicalAgentId(event.agent);
+    const from = event.from === undefined ? undefined : canonicalAgentId(event.from);
+    if (!agent || (event.from !== undefined && !from)) return false;
     const status: RoomStatus = event.status ?? "working";
     if (!["waiting", "queued", "working", "complete", "interrupted", "stalled"].includes(status)) return false;
     runIdRef.current += 1;
-    const index = STEPS.findIndex((step) => step.agents.includes(event.agent));
-    dispatch({ type: "EXTERNAL", event: { ...event, status }, index, elapsed: elapsedRef.current });
+    const canonicalEvent: GuildEvent = { ...event, agent, from: from ?? undefined, status };
+    const index = STEPS.findIndex((step) => step.agents.includes(agent));
+    dispatch({ type: "EXTERNAL", event: canonicalEvent, index, elapsed: elapsedRef.current });
     return true;
   }, []);
 
@@ -626,6 +646,10 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
     agentActivities,
     statistics,
     agentRunCounts,
+    agentMetrics,
+    agentCatalog,
+    agentCatalogSettings,
+    agentWorkspacePaths,
     storageConnected,
     healthApiConnected,
     storageHealth,

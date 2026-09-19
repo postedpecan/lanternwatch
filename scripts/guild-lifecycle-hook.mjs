@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lifecycleStoragePaths } from "./guild-paths.mjs";
+import { startHeartbeatScheduler } from "./guild-heartbeat.mjs";
 import { reportEvent } from "./guild-report.mjs";
-import { resolveAgentRole } from "./guild-roles.mjs";
+import { canonicalAgentId } from "./guild-roles.mjs";
 
 const { stateDirectory, logDirectory } = lifecycleStoragePaths(
   process.env.LANTERNWATCH_STORAGE_ROOT,
@@ -31,6 +32,15 @@ function saveState(sessionId, state) {
   renameSync(temporary, target);
 }
 function loadState(sessionId) { try { return JSON.parse(readFileSync(stateFile(sessionId), "utf8")); } catch { return null; } }
+function launchClaudeHeartbeat(sessionStateFile, runId) {
+  const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const heartbeatScript = path.join(scriptDirectory, "guild-heartbeat.mjs");
+  spawn(process.execPath, [heartbeatScript, sessionStateFile, runId], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  }).unref();
+}
 function appendHookLog(entry) {
   try {
     mkdirSync(logDirectory, { recursive: true });
@@ -55,6 +65,13 @@ function logFailure(stage, error, event = "invalid", currentSessionId = "session
   });
 }
 
+// Codex expects Stop and SubagentStop hooks that exit successfully to emit a
+// JSON object on stdout. Emit the empty, non-blocking response before doing
+// telemetry work so an API timeout or SQLite fallback can never turn the hook
+// into an invalid terminal response. The same response is harmless for the
+// other lifecycle events and keeps the shared handler contract uniform.
+try { writeSync(1, "{}\n"); } catch {}
+
 let payload = {};
 try { payload = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch (error) { logFailure("parse", error); process.exit(0); }
 const eventName = payload.hook_event_name;
@@ -65,10 +82,10 @@ const runId = `${SOURCE}-${sessionId}-${turnId}`;
 const now = new Date().toISOString();
 const base = { projectPath: cwd, projectName: path.basename(cwd), runId, source: SOURCE, quest: `${HOST_LABEL} task`, occurredAt: now };
 
-// Resolved once so the diagnostic receipt and the report/skip decision below
-// agree on the same role and the same matched/ambiguous verdict.
-const agentResolution = (eventName === "SubagentStart" || eventName === "SubagentStop")
-  ? resolveAgentRole(payload.agent_type)
+// Codex sends the custom agent's selected type. Preserve it as the lifecycle
+// identity instead of collapsing user-owned agents into LanternWatch roles.
+const agentType = (eventName === "SubagentStart" || eventName === "SubagentStop")
+  ? canonicalAgentId(payload.agent_type) || safe(payload.agent_type, "unclassified-agent")
   : null;
 
 const receipt = {
@@ -79,44 +96,44 @@ const receipt = {
   sessionId,
   turnId,
 };
-if (agentResolution) {
+if (agentType) {
   receipt.agentInstanceId = safe(payload.agent_id, "agent");
-  receipt.agent = agentResolution.role;
-  if (!agentResolution.matched) {
-    // Ambiguous agent_type (e.g. the "claude" catch-all): roleForAgentType
-    // had to fall through to its unconditional archivist default rather than
-    // confidently identifying a role. Note it here so the log still shows
-    // what happened, even though the automatic dashboard report is skipped
-    // below in favor of a manual guild-report.mjs call for the real role.
-    receipt.note = "ambiguous-agent-type-report-skipped";
-  }
+  receipt.agent = agentType;
 }
 appendHookLog(receipt);
 
+let heartbeatOwnsLifecycle = false;
 try {
   if (eventName === "UserPromptSubmit") {
     saveState(sessionId, { runId, cwd, turnId, source: SOURCE, open: true });
-    await reportEvent({ ...base, eventId: `hook-start-${sessionId}-${turnId}`, agent: "guildmaster", status: "working", message: `${HOST_LABEL} accepted the task and began working.` });
+    await reportEvent({ ...base, eventId: `hook-start-${sessionId}-${turnId}`, agent: "program-manager", status: "working", message: `${HOST_LABEL} accepted the task and began working.` });
     if (process.env.LANTERNWATCH_DISABLE_HEARTBEAT !== "1") {
-      spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "guild-heartbeat.mjs"), stateFile(sessionId), runId], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      if (SOURCE === "codex") {
+        // Codex installs UserPromptSubmit as an asynchronous hook. Keep its
+        // runner as the heartbeat worker instead of spawning a descendant
+        // that inherits the Windows Job Object and prevents wait_with_output
+        // from completing after the nominal hook process exits.
+        startHeartbeatScheduler(stateFile(sessionId), runId);
+        heartbeatOwnsLifecycle = true;
+      } else {
+        // Claude Code does not use Codex's async hook contract or Job Object.
+        launchClaudeHeartbeat(stateFile(sessionId), runId);
+      }
     }
   } else if (eventName === "Stop") {
-    await reportEvent({ ...base, eventId: `hook-stop-${sessionId}-${turnId}`, agent: "guildmaster", status: "complete", message: `${HOST_LABEL} completed the turn and returned to idle.`, runComplete: true });
+    await reportEvent({ ...base, eventId: `hook-stop-${sessionId}-${turnId}`, agent: "program-manager", status: "complete", message: `${HOST_LABEL} completed the turn and returned to idle.`, runComplete: true });
     saveState(sessionId, { runId, cwd, turnId, source: SOURCE, open: false });
   } else if (eventName === "SubagentStart" || eventName === "SubagentStop") {
-    if (agentResolution.matched) {
-      const agentId = safe(payload.agent_id, "agent");
-      const status = eventName === "SubagentStart" ? "working" : "complete";
-      await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentResolution.role, agentInstanceId: agentId, status, message: status === "working" ? "A team member began assigned work." : "A team member finished assigned work." });
-    }
-    // else: ambiguous agent_type (e.g. the "claude" catch-all) — the
-    // diagnostic receipt above already recorded it with a note; skip the
-    // dashboard/DB report here so it doesn't show a low-confidence
-    // "archivist" guess. A manual guild-report.mjs call from the dispatching
-    // agent (which knows the real role) is expected to be the sole source of
-    // truth for this subagent's dashboard entry.
+    const agentId = safe(payload.agent_id, "agent");
+    const status = eventName === "SubagentStart" ? "working" : "complete";
+    await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentType, agentInstanceId: agentId, status, message: status === "working" ? "A Codex agent began assigned work." : "A Codex agent finished assigned work." });
   } else if (eventName === "SessionEnd") {
     const state = loadState(sessionId);
-    if (state?.open) await reportEvent({ projectPath: state.cwd, projectName: path.basename(state.cwd), runId: state.runId, eventId: `hook-sessionend-${sessionId}`, source: SOURCE, agent: "guildmaster", status: "interrupted", message: `The ${HOST_LABEL} session ended before the turn reported completion.`, quest: `${HOST_LABEL} task`, occurredAt: now, runComplete: true });
+    if (state?.open) await reportEvent({ projectPath: state.cwd, projectName: path.basename(state.cwd), runId: state.runId, eventId: `hook-sessionend-${sessionId}`, source: SOURCE, agent: "program-manager", status: "interrupted", message: `The ${HOST_LABEL} session ended before the turn reported completion.`, quest: `${HOST_LABEL} task`, occurredAt: now, runComplete: true });
   }
 } catch (error) { logFailure("handle", error, eventName, sessionId); }
+
+// Every hook except Codex's explicitly asynchronous UserPromptSubmit ends
+// after its awaited persistence attempt. That async hook intentionally stays
+// alive as the heartbeat worker and exits when Stop closes its state.
+if (!heartbeatOwnsLifecycle) process.exit(0);

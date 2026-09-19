@@ -79,9 +79,12 @@ Reporting failure must never block the actual task.
 
 - Use ``$reportScript`` manually only when a named Lanternwatch role must be
   recorded more precisely than the automatic subagent type permits.
-- Use only the supported role ids: herald, guildmaster, steward, pathfinder,
-  courier, archivist, genealogist, hookwright, interface-weaver, ledgerkeeper,
-  prover, chronicler, counselor, assayer.
+- Use only the supported role ids: business-analyst, program-manager,
+  operations-coordinator, technical-researcher, market-intelligence-analyst,
+  systems-analyst, change-management-analyst, platform-engineer,
+  frontend-engineer, data-engineer, qa-engineer, technical-writer,
+  strategy-consultant, compliance-reviewer. Legacy fantasy ids are accepted
+  as input aliases, but Lanternwatch emits and stores only these role ids.
 - Never place secrets, raw prompts, private file contents, or command lines in
   a manual message.
 $endMarker
@@ -105,7 +108,7 @@ $runtimeConfiguration = [ordered]@{ storageRoot = $StorageRoot; databasePath = $
 [IO.File]::WriteAllText($runtimeConfigPath, ($runtimeConfiguration | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 
 $env:LANTERNWATCH_CONFIG_PATH = $runtimeConfigPath
-& $nodeExecutable $reportScript --quiet --event-id lanternwatch-setup-claude-complete --status complete --agent guildmaster --run-id lanternwatch-setup-claude --project $projectRoot --project-name Lanternwatch --quest 'Install Claude Code agent activity reporting' --message 'Claude Code lifecycle hooks registered in global settings.json.' --run-complete
+& $nodeExecutable $reportScript --quiet --event-id lanternwatch-setup-claude-complete --status complete --agent program-manager --run-id lanternwatch-setup-claude --project $projectRoot --project-name Lanternwatch --quest 'Install Claude Code agent activity reporting' --message 'Claude Code lifecycle hooks registered in global settings.json.' --run-complete
 
 Write-Output "Lanternwatch Claude Code hooks installed."
 Write-Output "Database: $DatabasePath"

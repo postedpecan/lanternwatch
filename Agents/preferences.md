@@ -12,7 +12,11 @@ one-off task details, or rules already present in `AGENTS.md`.
 *(no preferences recorded yet)*
 
 ## Program Manager
-*(no preferences recorded yet)*
+- Use a tool, skill, plugin, connector, or extra context only when it materially
+  improves the assigned task; installed capabilities receive no automatic
+  preference.
+  Why: The user corrected "prefer installed tools" to "use it if it makes my
+  agents better" and confirmed this as the reusable routing rule.
 
 ## Operations Coordinator
 *(no preferences recorded yet)*

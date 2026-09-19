@@ -9,6 +9,7 @@ import { getProjectFilterState } from "@/components/guild/project-filter-state";
 
 export function TopBar() {
   const {
+    hydrated,
     mode,
     projects,
     selectedProjectId,
@@ -18,7 +19,7 @@ export function TopBar() {
     liveStatus,
   } = useGuildData();
   const pathname = usePathname();
-  const projectFilterState = getProjectFilterState(mode, projects.length);
+  const projectFilterState = getProjectFilterState(hydrated, mode, projects.length);
 
   return (
     <header className="site-header">
@@ -67,6 +68,14 @@ export function TopBar() {
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5m4-1v6l4 2" /></svg>
             History
+          </Link>
+          <Link
+            href="/agents"
+            className={`nav-link${pathname === "/agents" ? " active" : ""}`}
+            aria-current={pathname === "/agents" ? "page" : undefined}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20v-1.5A4.5 4.5 0 0 1 8.5 14h7a4.5 4.5 0 0 1 4.5 4.5V20M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg>
+            Agents
           </Link>
           <div className="scope-filter">
             <label htmlFor="sharedProjectFilter">Filter</label>

@@ -2,9 +2,11 @@
 
 import { useState, type FormEvent } from "react";
 import { AGENTS, AGENT_IDS, STEPS, type AgentId } from "@/lib/guild-data";
-import type { GuildAgentActivity, GuildProject, GuildStorageHealth, StoredGuildEvent } from "@/lib/guild-contract";
+import type { AgentPresentation, CatalogAgent, CatalogSettings, GuildAgentActivity, GuildProject, GuildRun, GuildStorageHealth, StoredGuildEvent } from "@/lib/guild-contract";
 import { formatAge, formatElapsed, formatMoment, titleCase } from "@/lib/guild-format";
 import { describeHookDiagnostic } from "@/components/guild/hook-diagnostic";
+import { getDemoNextStepIndex, getFocusedWorkflowActivities } from "@/components/guild/workflow-activity";
+import { needsDelegationWarning } from "@/components/guild/delegation-warning";
 import {
   DEMO_TOTAL_DURATION_SECONDS,
   runtimeFor,
@@ -14,6 +16,46 @@ import {
 } from "@/components/guild/GuildDataContext";
 
 const orderedAgents = AGENT_IDS.map((id) => AGENTS.find((agent) => agent.id === id)!);
+
+function AgentTags({ presentation }: { presentation?: AgentPresentation }) {
+  if (!presentation) return null;
+  if (presentation.unresolved) return <span className="agent-tags unresolved" title="More than one enabled definition has this name; LanternWatch cannot prove which one produced this activity.">Source unresolved</span>;
+  if (!presentation.scope && !presentation.tags.length) return null;
+  return <span className="agent-tags">{presentation.scope && <i>{presentation.scope}</i>}{presentation.tags.map((tag) => <i key={tag}>{tag}</i>)}</span>;
+}
+
+function AgentCatalogPanel({ agents, settings }: { agents: CatalogAgent[]; settings: CatalogSettings }) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const request = async (body: unknown) => {
+    setBusy(true); setError("");
+    try {
+      const response = await fetch("/api/guild/agents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Agent catalog update failed.");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Agent catalog update failed."); }
+    finally { setBusy(false); }
+  };
+  const submitCreate = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    void request({ action: "create", scope: data.get("scope"), name: data.get("name"), description: data.get("description"), developerInstructions: data.get("instructions"), tags: String(data.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean) });
+    event.currentTarget.reset();
+  };
+  const saveSettings = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    void request({ action: "settings", settings: { discoveryMode: data.get("discoveryMode"), collisionPolicy: data.get("collisionPolicy") } });
+  };
+  return <section className="agent-catalog" aria-labelledby="agentCatalogTitle">
+    <div className="activity-head"><div><p className="kicker">Your Codex agents</p><h2 id="agentCatalogTitle">Agent catalog</h2></div><span>{agents.length} discovered</span><button type="button" onClick={() => void request({ action: "scan" })} disabled={busy}>Refresh agents</button></div>
+    <p className="catalog-copy">LanternWatch only lists your Codex definitions. Global and workspace agents stay separate and show their source path.</p>
+    {error && <p className="catalog-error" role="alert">{error}</p>}
+    <details className="catalog-settings"><summary>Catalog settings</summary><form onSubmit={saveSettings} className="catalog-settings-form"><label>Discovery<select name="discoveryMode" defaultValue={settings.discoveryMode}><option value="manual">Manual scan</option><option value="automatic">Automatic refresh</option><option value="watcher">Filesystem watcher</option></select></label><label>Same-name default<select name="collisionPolicy" defaultValue={settings.collisionPolicy}><option value="rename">Rename — recommended</option><option value="tag">Keep names; distinguish with tags</option><option value="disable">Disable one source</option></select></label><button type="submit" disabled={busy}>Save settings</button></form></details>
+    <form className="catalog-create" onSubmit={submitCreate}><strong>Create agent</strong><label>Name<input name="name" required pattern="[a-z][a-z0-9_-]{0,63}" placeholder="release-helper" /></label><label>Description<input name="description" required maxLength={500} /></label><label>Developer instructions<textarea name="instructions" required rows={3} /></label><label>Custom tags<input name="tags" placeholder="release, trusted" /></label><label>Destination<select name="scope"><option value="global">Global Codex agents</option><option value="workspace">This workspace</option></select></label><button className="primary-btn" type="submit" disabled={busy}>Create agent</button></form>
+    <div className="catalog-list" role="list">{agents.length ? agents.map((agent) => <article className={`catalog-agent${agent.collision ? " collision" : ""}`} role="listitem" key={agent.id}><div className="catalog-agent-title"><div><strong>{agent.name}</strong><AgentTags presentation={{ scope: agent.scope, tags: agent.tags, unresolved: false }} /></div><span>{agent.enabled ? "On" : "Off"}</span></div><p>{agent.description}</p><code title={agent.sourcePath}>{agent.sourcePath}</code>{agent.collision && <p className="collision-copy"><strong>Same-name definitions found.</strong> Rename is recommended: it gives Codex and activity tracking an unambiguous identity. Tags keep names unchanged but cannot prove activity source; disabling one removes ambiguity but makes it unavailable in Codex.</p>}<div className="catalog-actions"><button type="button" disabled={busy} onClick={() => void request({ action: "toggle", sourcePath: agent.sourcePath, enabled: !agent.enabled })}>{agent.enabled ? "Turn off" : "Turn on"}</button><details><summary>Rename or tag</summary><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "rename", sourcePath: agent.sourcePath, name: data.get("name") }); }}><label>Rename<input name="name" defaultValue={agent.name} required pattern="[a-z][a-z0-9_-]{0,63}" /></label><button type="submit" disabled={busy}>Rename</button></form><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "tags", sourcePath: agent.sourcePath, tags: String(data.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean) }); }}><label>Tags<input name="tags" defaultValue={agent.tags.join(", ")} /></label><button type="submit" disabled={busy}>Save tags</button></form></details></div></article>) : <p className="catalog-empty">No user-owned Codex agents were found yet. Create one here or add a TOML file to your global or workspace agent folder.</p>}</div>
+  </section>;
+}
 
 // A live run running longer than this project's historical average is still
 // "in progress" — its estimated bar should never claim to be complete.
@@ -129,14 +171,16 @@ function AgentRunList({
   state,
   activities,
   agentRunCounts,
+  catalogAgents,
 }: {
   mode: DataMode;
   state: GuildState;
   activities: GuildAgentActivity[];
-  agentRunCounts: Record<AgentId, number>;
+  agentRunCounts: Record<string, number>;
+  catalogAgents: CatalogAgent[];
 }) {
   if (mode === "live") {
-    const activitiesByRole = new Map<AgentId, GuildAgentActivity[]>();
+    const activitiesByRole = new Map<string, GuildAgentActivity[]>();
     for (const activity of activities) {
       const roleActivities = activitiesByRole.get(activity.agent) ?? [];
       roleActivities.push(activity);
@@ -144,13 +188,13 @@ function AgentRunList({
     }
 
     return (
-      <div className="agent-instance-grid" aria-label="Team role status, project, activity, and runtime">
-        {orderedAgents.map((agent) => {
-          const roleActivities = activitiesByRole.get(agent.id) ?? [];
+      <div className="agent-instance-grid" aria-label="Codex agent status, project, activity, and runtime">
+        {[...new Map<string, CatalogAgent>([...catalogAgents.map((agent) => [agent.name, agent] as [string, CatalogAgent]), ...activities.map((activity) => [activity.agent, { id: activity.agent, name: activity.agent, description: "Observed lifecycle activity", scope: "global", sourcePath: "", enabled: true, tags: [], collision: false, readOnly: false, codexReady: false }] as [string, CatalogAgent])]).values()].map((agent) => {
+          const roleActivities = activitiesByRole.get(agent.name) ?? [];
           return (
             <section className={`agent-instance-group${roleActivities.length ? " is-active" : " is-idle"}`} key={agent.id} aria-labelledby={`agentGroup-${agent.id}`}>
               <div className="agent-instance-heading">
-                <h3 id={`agentGroup-${agent.id}`}>{agent.name}</h3>
+                <div><h3 id={`agentGroup-${agent.id}`}>{agent.name}</h3><AgentTags presentation={agent.sourcePath ? { scope: agent.scope, tags: agent.tags, unresolved: false } : undefined} /></div>
                 <span>{roleActivities.length ? `${roleActivities.length} active` : "Idle"}</span>
               </div>
               <div role="list">
@@ -159,7 +203,7 @@ function AgentRunList({
                     <div className="agent-instance-main">
                       <div className="agent-instance-project">
                         <strong>{activity.projectName}</strong>
-                        <span>{titleCase(activity.status)}{activity.status === "working" && <span className="loading-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}</span>
+                        <span>{titleCase(activity.status)}{activity.status === "working" && <span className="loading-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}<AgentTags presentation={activity.presentation} /></span>
                       </div>
                       <p>{activity.message}</p>
                     </div>
@@ -167,8 +211,8 @@ function AgentRunList({
                   </div>
                 )) : (
                   <div className="agent-idle-row" role="listitem">
-                    <span>{agent.specialty}</span>
-                    <small>Used in {agentRunCounts[agent.id]} run{agentRunCounts[agent.id] === 1 ? "" : "s"}</small>
+                    <span>{agent.description}</span>
+                    <small>Used in {agentRunCounts[agent.name] ?? 0} run{agentRunCounts[agent.name] === 1 ? "" : "s"}</small>
                   </div>
                 )}
               </div>
@@ -224,22 +268,113 @@ function AgentRunList({
   );
 }
 
-function Timeline({ state }: { state: GuildState }) {
+function activityInstanceLabel(activity: GuildAgentActivity) {
+  const suffix = activity.agentInstanceId.split(/[/:]/).filter(Boolean).at(-1) ?? activity.agentInstanceId;
+  return `Instance ${suffix.length > 14 ? `${suffix.slice(0, 12)}…` : suffix}`;
+}
+
+function LiveWorkflowActivity({ activity }: { activity: GuildAgentActivity }) {
+  const instanceLabel = activityInstanceLabel(activity);
   return (
-    <div className="timeline">
-      {STEPS.map((step, index) => (
-        <div className={`timeline-row ${state.timelineStatuses[index]}`} key={step.id}>
-          <span className="timeline-node">{String(index + 1).padStart(2, "0")}</span>
-          <div className="timeline-copy"><strong>{step.label}</strong><span>{step.agentLabel}</span></div>
-          <time>{state.timelineTimes[index] === null ? "—" : formatElapsed(state.timelineTimes[index]!)}</time>
-        </div>
-      ))}
+    <div className={`workflow-activity-row ${activity.status}`} role="listitem">
+      <div className="workflow-activity-title">
+        <strong>{titleCase(activity.agent)}</strong>
+        <span>{titleCase(activity.status)}</span>
+      </div>
+      <p>{activity.message}</p>
+      <div className="workflow-activity-meta">
+        <code title={activity.agentInstanceId}>{instanceLabel}</code>
+        <AgentTags presentation={activity.presentation} />
+        <span><time dateTime={`PT${activity.durationSeconds}S`}>{formatElapsed(activity.durationSeconds)}</time> {activity.status === "working" ? "active" : "queued"} · updated <time dateTime={activity.updatedAt}>{formatMoment(activity.updatedAt)}</time></span>
+      </div>
     </div>
   );
 }
 
-function RoleActivity({ mode, state, activities }: { mode: DataMode; state: GuildState; activities: GuildAgentActivity[] }) {
-  const liveRoleStatuses = new Map<AgentId, "queued" | "working">();
+function WorkflowBoard({
+  mode,
+  hydrated,
+  storageConnected,
+  selectedRunId,
+  currentRun,
+  focusedProjectName,
+  activities,
+  state,
+}: {
+  mode: DataMode;
+  hydrated: boolean;
+  storageConnected: boolean;
+  selectedRunId: string;
+  currentRun: GuildRun | null;
+  focusedProjectName: string;
+  activities: GuildAgentActivity[];
+  state: GuildState;
+}) {
+  const focused = getFocusedWorkflowActivities(
+    activities,
+    currentRun?.id ?? null,
+    mode !== "live" || (hydrated && storageConnected),
+  );
+  const demoStep = state.currentStep >= 0 ? STEPS[state.currentStep] : null;
+  const demoWorkingAgents = demoStep?.agents.filter((agent) => state.roomStatuses[agent] === "working") ?? [];
+  const demoNextStepIndex = getDemoNextStepIndex(state.currentStep, STEPS.length, state.running, state.delivered);
+  const demoNextStep = demoNextStepIndex === null ? null : STEPS[demoNextStepIndex];
+  const terminalStatus = currentRun && currentRun.status !== "working" ? titleCase(currentRun.status) : null;
+
+  let doingNowEmpty = "No working activities reported for this run.";
+  if (!hydrated) doingNowEmpty = "Loading current work…";
+  else if (mode === "live" && !storageConnected) doingNowEmpty = "Live activity is unavailable while the dashboard API is offline.";
+  else if (mode === "live" && !currentRun) doingNowEmpty = "No active or selected run to show.";
+  else if (mode === "live" && terminalStatus) doingNowEmpty = `This run is ${terminalStatus.toLowerCase()}; no agents are working.`;
+  else if (mode === "demo" && state.paused) doingNowEmpty = "The local demo is paused.";
+  else if (mode === "demo") doingNowEmpty = "No demo roles are working right now.";
+
+  const liveUpNextEmpty = !hydrated
+    ? "Loading reported work…"
+    : !storageConnected
+      ? "Upcoming work is unavailable while the dashboard API is offline."
+      : "No upcoming work reported.";
+
+  return (
+    <aside className="workboard" aria-labelledby="workflowBoardTitle">
+      <div className="panel-head">
+        <div className="panel-title"><div><h2 id="workflowBoardTitle">Now &amp; next</h2><p>{focusedProjectName} · {selectedRunId ? "selected run" : mode === "demo" ? "local demonstration" : "focused run"}</p></div></div>
+        <span className="step-counter">{formatElapsed(state.elapsed)}</span>
+      </div>
+      <div className="workflow-focus"><span>{mode === "demo" ? "Demo task" : "Current task"}</span><p>{state.quest || "No project task has started."}</p></div>
+      <div className="workflow-sections">
+        <section className="workflow-section" aria-labelledby="doingNowTitle">
+          <div className="workflow-section-head"><h3 id="doingNowTitle">Doing now</h3><span>{mode === "demo" ? demoWorkingAgents.length : focused.doingNow.length}</span></div>
+          <div className="workflow-activity-list" role="list" aria-live="polite">
+            {mode === "live" ? focused.doingNow.length
+              ? focused.doingNow.map((activity) => <LiveWorkflowActivity activity={activity} key={activity.id} />)
+              : <p className="workflow-empty" role="listitem"><span role={hydrated && !storageConnected ? "alert" : "status"}>{doingNowEmpty}</span></p>
+              : demoWorkingAgents.length
+                ? demoWorkingAgents.map((agentId) => {
+                    const agent = AGENTS.find((candidate) => candidate.id === agentId)!;
+                    return <div className="workflow-activity-row demo working" role="listitem" key={agentId}><div className="workflow-activity-title"><strong>{agent.name}</strong><span>{state.paused ? "Paused" : "Working"}</span></div><p>{demoStep?.detail}</p><div className="workflow-activity-meta"><code>Local demo</code><span><time dateTime={`PT${runtimeFor(state, agentId)}S`}>{formatElapsed(runtimeFor(state, agentId))}</time> active</span></div></div>;
+                  })
+                : <p className="workflow-empty" role="listitem"><span role="status">{doingNowEmpty}</span></p>}
+          </div>
+        </section>
+        <section className="workflow-section" aria-labelledby="upNextTitle">
+          <div className="workflow-section-head"><h3 id="upNextTitle">Up next</h3><span>{mode === "demo" ? (demoNextStep ? 1 : 0) : focused.upNext.length}</span></div>
+          <div className="workflow-activity-list" role="list">
+            {mode === "live" ? focused.upNext.length
+              ? focused.upNext.map((activity) => <LiveWorkflowActivity activity={activity} key={activity.id} />)
+              : <p className="workflow-empty" role="listitem"><span role={!hydrated || !storageConnected ? "status" : undefined}>{liveUpNextEmpty}</span></p>
+              : demoNextStep
+                ? <div className="workflow-activity-row demo queued" role="listitem"><div className="workflow-activity-title"><strong>{demoNextStep.label}</strong><span>Demo preview</span></div><p>{demoNextStep.agentLabel}</p><div className="workflow-activity-meta"><code>Local demo only</code><span>Static example, not a live plan</span></div></div>
+                : <p className="workflow-empty" role="listitem">No upcoming work reported.</p>}
+          </div>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function RoleActivity({ mode, state, activities, catalogAgents }: { mode: DataMode; state: GuildState; activities: GuildAgentActivity[]; catalogAgents: CatalogAgent[] }) {
+  const liveRoleStatuses = new Map<string, "queued" | "working">();
   for (const activity of activities) {
     if (activity.status === "working" || !liveRoleStatuses.has(activity.agent)) {
       liveRoleStatuses.set(activity.agent, activity.status);
@@ -258,10 +393,12 @@ function RoleActivity({ mode, state, activities }: { mode: DataMode; state: Guil
         <h2 id="roleActivityTitle">Role activity</h2>
         <span>{summary}</span>
       </div>
-      <div className="contribution-grid" role="list" aria-label="Activity by company role">
-        {orderedAgents.map((agent) => {
-          const status = mode === "live" ? liveRoleStatuses.get(agent.id) ?? "waiting" : state.roomStatuses[agent.id];
-          const instanceCount = mode === "live" ? activities.filter((activity) => activity.agent === agent.id).length : 0;
+      <div className="contribution-grid" role="list" aria-label="Activity by Codex agent">
+        {(mode === "live" ? catalogAgents : orderedAgents).map((agent) => {
+          const status = mode === "live"
+            ? liveRoleStatuses.get(agent.name) ?? "waiting"
+            : state.roomStatuses[(agent as (typeof orderedAgents)[number]).id];
+          const instanceCount = mode === "live" ? activities.filter((activity) => activity.agent === agent.name).length : 0;
           const description = mode === "live" && instanceCount
             ? `${agent.name}: ${instanceCount} active instance${instanceCount === 1 ? "" : "s"}`
             : `${agent.name}: ${titleCase(status)}`;
@@ -282,11 +419,10 @@ function RoleActivity({ mode, state, activities }: { mode: DataMode; state: Guil
 
 function GlobalEventRow({ event, projects }: { event: StoredGuildEvent; projects: GuildProject[] }) {
   const projectName = projects.find((project) => project.id === event.projectId)?.name ?? "Unknown project";
-  const agentName = AGENTS.find((agent) => agent.id === event.agent)?.name ?? titleCase(event.agent);
   return (
     <div className="log-line global-log-line">
       <time dateTime={event.occurredAt}>{formatMoment(event.occurredAt)}</time>
-      <strong>{agentName}</strong>
+      <strong>{titleCase(event.agent)} <AgentTags presentation={event.presentation} /></strong>
       <b title={projectName}>{projectName}</b>
       <span>{event.message}</span>
     </div>
@@ -304,9 +440,11 @@ export function LiveView() {
     selectedRunId,
     followLive,
     currentRun,
+    currentEvents,
     recentEvents,
     agentActivities,
     agentRunCounts,
+    agentCatalog,
     storageConnected,
     healthApiConnected,
     storageHealth,
@@ -329,6 +467,7 @@ export function LiveView() {
     ? "Local demo"
     : projects.find((project) => project.id === currentRun?.projectId)?.name ?? scopeName;
   const progressInfo = computeProgressInfo(mode, state, statistics.averageDurationSeconds, liveStatus.text, scopeName);
+  const delegationWarning = mode === "live" && needsDelegationWarning(currentRun, currentEvents);
   const stageSummary = mode === "demo"
     ? state.delivered
       ? "Local demo · final answer ready"
@@ -341,21 +480,11 @@ export function LiveView() {
     <>
       {!hydrated && <p className="loading-banner" role="status">Loading local activity…</p>}
       <header className="hero">
-        <div><p className="kicker">Overview</p><h2>Team activity, at a glance</h2><p className="hero-copy">See which company roles are working, which have finished, and how long each has been active.</p></div>
-        <form className="commission-box" onSubmit={handleSubmit}>
-          <div className="commission-context">
-            <span>Demo workspace</span>
-            <span className={`storage-state ${storageConnected ? "connected" : ""}`}>
-              {storageConnected ? "SQLite + Obsidian connected" : "Waiting for local API"}
-            </span>
-          </div>
-          <label htmlFor="commissionInput">Project task</label>
-          <textarea id="commissionInput" maxLength={260} value={draft} onChange={(event) => setDraft(event.target.value)} />
-          <div className="commission-actions"><span className="hint">Live runs sync automatically; this button starts a local demo.</span><button className="primary-btn" type="submit" disabled={mode === "demo" && state.running}>{mode === "demo" && state.running ? "Demo running…" : "Run demo"}</button></div>
-        </form>
+        <div><p className="kicker">Overview</p><h2>Your Codex agents, at a glance</h2><p className="hero-copy">LanternWatch detects your own global and workspace agents, then shows their real lifecycle activity with scope and custom tags.</p></div>
+        <div className="commission-box"><div className="commission-context"><span>Local catalog</span><span className={`storage-state ${storageConnected ? "connected" : ""}`}>{storageConnected ? "SQLite connected" : "Waiting for local API"}</span></div><p className="hint">Manage agents, tags, and collision settings on the Agents page. Codex needs a fresh session after agent-file changes.</p></div>
       </header>
 
-      <RoleActivity mode={mode} state={state} activities={agentActivities} />
+      <RoleActivity mode={mode} state={state} activities={agentActivities} catalogAgents={agentCatalog} />
 
       <section className="workspace" aria-label="Live team work status">
         <article className={`hall-card${isAgentStatusCollapsed ? " is-collapsed" : ""}`}>
@@ -393,16 +522,21 @@ export function LiveView() {
               <div className={`progress-bar${progressInfo.isEstimate ? " is-estimate" : ""}`} style={{ width: `${progressInfo.percent}%` }} />
             </div>
             <OperationalDiagnostic dashboardConnected={storageConnected} healthApiConnected={healthApiConnected} health={storageHealth} />
-            <AgentRunList mode={mode} state={state} activities={agentActivities} agentRunCounts={agentRunCounts} />
+            {delegationWarning && <p className="delegation-warning" role="status"><strong>No delegated specialist recorded.</strong> This terminal run has no recorded lifecycle event from an agent other than Program Manager. LanternWatch cannot tell whether a specialist worked without a recorded specialist event.</p>}
+            <AgentRunList mode={mode} state={state} activities={agentActivities} agentRunCounts={agentRunCounts} catalogAgents={agentCatalog} />
           </div>
         </article>
 
-        <aside className="workboard" aria-label="Project task workflow">
-          <div className="panel-head"><div className="panel-title"><div><h2>Workflow</h2><p>{focusedProjectName} · focused dependencies and handoffs</p></div></div><span className="step-counter">{formatElapsed(state.elapsed)}</span></div>
-          <div className="quest-mini"><span>{selectedRunId ? "Selected project task" : "Focused project task"} · {focusedProjectName}</span><p>{state.quest || "No project task has started."}</p></div>
-          <Timeline state={state} />
-          <div className="active-detail" aria-live="polite"><div className="detail-top"><h3>{state.detail.title}</h3><span className="working-tag">{state.detail.tag}</span></div><p>{state.detail.text}</p></div>
-        </aside>
+        <WorkflowBoard
+          mode={mode}
+          hydrated={hydrated}
+          storageConnected={storageConnected}
+          selectedRunId={selectedRunId}
+          currentRun={currentRun}
+          focusedProjectName={focusedProjectName}
+          activities={agentActivities}
+          state={state}
+        />
       </section>
 
       <section className="activity" aria-label="Team activity and state legend">

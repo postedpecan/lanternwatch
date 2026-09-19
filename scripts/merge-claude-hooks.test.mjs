@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeLanternwatchClaudeHooks } from "./merge-claude-hooks.mjs";
+import { mergeLanternwatchClaudeHooks, removeLanternwatchClaudeHooks } from "./merge-claude-hooks.mjs";
 
 const scriptPath = String.raw`C:\Project\scripts\guild-lifecycle-hook.mjs`;
 const nodePath = String.raw`C:\Tools\node.exe`;
@@ -59,4 +59,36 @@ test("never introduces a commandWindows key (Claude Code has no such field)", ()
       }
     }
   }
+});
+
+test("removes only Lanternwatch handlers from lifecycle events and preserves unrelated hooks and settings", () => {
+  const unrelated = { type: "command", command: "node unrelated.mjs" };
+  const lanternwatch = { type: "command", command: nodePath, args: ["old/guild-lifecycle-hook.mjs", "claude"] };
+  const input = {
+    theme: "dark",
+    hooks: {
+      UserPromptSubmit: [{ hooks: [lanternwatch, unrelated] }],
+      Stop: [{ hooks: [lanternwatch] }],
+      CustomEvent: [{ hooks: [lanternwatch, unrelated] }],
+    },
+  };
+
+  const result = removeLanternwatchClaudeHooks(input);
+
+  assert.equal(result.removed, 2);
+  assert.deepEqual(result.events, ["UserPromptSubmit", "Stop"]);
+  assert.equal(input.theme, "dark");
+  assert.deepEqual(input.hooks.UserPromptSubmit, [{ hooks: [unrelated] }]);
+  assert.equal(input.hooks.Stop, undefined);
+  assert.deepEqual(input.hooks.CustomEvent, [{ hooks: [lanternwatch, unrelated] }]);
+});
+
+test("leaves a configuration without hooks untouched", () => {
+  const input = { theme: "dark", effortLevel: "high" };
+
+  const result = removeLanternwatchClaudeHooks(input);
+
+  assert.equal(result.removed, 0);
+  assert.deepEqual(result.events, []);
+  assert.deepEqual(input, { theme: "dark", effortLevel: "high" });
 });

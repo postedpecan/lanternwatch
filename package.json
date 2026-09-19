@@ -25,15 +25,25 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
-    "test": "node --experimental-strip-types --test scripts/guild-roles.test.mjs scripts/guild-lifecycle-hook.test.mjs scripts/merge-hooks.test.mjs scripts/merge-claude-hooks.test.mjs scripts/research-capture.test.mjs components/guild/hook-diagnostic.test.mjs components/guild/project-filter-state.test.mjs lib/appearance.test.mjs lib/guild-data.test.mjs lib/guild-format.test.mjs lib/server/guild-store.test.mjs app/api/guild/dashboard/route.test.mjs",
+    "test": "node --experimental-strip-types --test scripts/guild-roles.test.mjs scripts/guild-lifecycle-hook.test.mjs scripts/merge-hooks.test.mjs scripts/merge-claude-hooks.test.mjs scripts/repair-lanternwatch-notifier.test.mjs scripts/recover-lanternwatch.test.mjs scripts/research-capture.test.mjs scripts/install-codex-agents.test.mjs components/guild/hook-diagnostic.test.mjs components/guild/project-filter-state.test.mjs components/guild/workflow-activity.test.mjs lib/appearance.test.mjs lib/guild-data.test.mjs lib/guild-format.test.mjs lib/server/agent-catalog.test.mjs lib/server/guild-store.test.mjs app/api/guild/dashboard/route.test.mjs",
     "build:sprites": "node scripts/build-sprites.mjs",
     "guild:report": "node scripts/guild-report.mjs",
     "guild:install": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch.ps1",
     "guild:install:claude": "powershell -ExecutionPolicy Bypass -File scripts/install-lanternwatch-claude.ps1",
     "guild:rehook": "powershell -ExecutionPolicy Bypass -File scripts/reinstall-lanternwatch-hooks.ps1",
+    "guild:repair-runtime": "powershell -ExecutionPolicy Bypass -File scripts/repair-lanternwatch-runtime.ps1",
+    "guild:repair-notifier": "node scripts/repair-lanternwatch-notifier.mjs",
+    "guild:recover": "powershell -ExecutionPolicy Bypass -File scripts/recover-lanternwatch.ps1",
+    "guild:restart-hosts": "powershell -ExecutionPolicy Bypass -File scripts/restart-lanternwatch-hosts.ps1",
     "guild:simulate": "node scripts/simulate-lifecycle.mjs",
+    "release": "node scripts/release-project.mjs",
+    "test:release": "node --test scripts/release-project.test.mjs",
+    "test:restart-hosts": "node --test scripts/restart-lanternwatch-hosts.test.mjs",
+    "test:recover": "node --test scripts/recover-lanternwatch.test.mjs",
     "research:capture": "node scripts/research-capture.mjs capture",
-    "research:retry": "node scripts/research-capture.mjs retry"
+    "research:retry": "node scripts/research-capture.mjs retry",
+    "test:hosted-db": "node --experimental-strip-types --test lib/server/hosted/hosted-database.test.mjs",
+    "test:hosted-db:postgres": "node --experimental-strip-types scripts/hosted-postgres-integration.mjs"
   },
   "dependencies": {
     "next": "latest",
@@ -41,9 +51,12 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.4.1",
     "@types/node": "latest",
+    "@types/pg": "8.15.5",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "pg": "8.16.3",
     "sharp": "^0.35.3",
     "typescript": "latest"
   }

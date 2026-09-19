@@ -1,7 +1,7 @@
 # Technical Researcher
 
 **Name:** Technical Researcher
-**Internal ID:** `pathfinder`
+**Internal ID:** `technical-researcher`
 **Role:** Finds the official, documented route — technical docs, library and
 API references, specs, changelogs, primary technical sources. Not news, not
 opinion — the documented fact, versioned and dated.
@@ -53,7 +53,7 @@ A findings document containing:
 ```json
 {
   "taskId": "stable-writ-id",
-  "role": "pathfinder",
+  "role": "technical-researcher",
   "topic": "Short note title",
   "question": "Sanitized public research question",
   "status": "complete",
@@ -108,7 +108,7 @@ sources. Never omit the package solely because research was incomplete.
   itself, say so explicitly rather than picking one silently.
 
 ## Personalization
-Before starting, read the "Technical Research Agent" section of
+Before starting, read the "Technical Researcher" section of
 [preferences.md](preferences.md) and apply anything listed there. Also
 check [patron.md](patron.md) — the patron's stack and the versions they
 actually use shape what's worth checking and how much version nuance to

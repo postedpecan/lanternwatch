@@ -17,7 +17,7 @@ export function heartbeatEvent(state, expectedRunId, occurredAt = new Date().toI
     projectPath: state.cwd,
     projectName: path.basename(state.cwd),
     runId: expectedRunId,
-    agent: "guildmaster",
+    agent: "program-manager",
     status: "working",
     message: "Lifecycle heartbeat",
     quest: `${hostLabel} task`,
@@ -28,24 +28,42 @@ export function heartbeatEvent(state, expectedRunId, occurredAt = new Date().toI
 
 export function startHeartbeatScheduler(stateFile, expectedRunId) {
   const started = Date.now();
-  async function beat() {
-    if (Date.now() - started > 12 * 60 * 60 * 1000) return false;
+  let lastReport = started;
+  let checking = false;
+  async function poll() {
+    const checkedAt = Date.now();
+    if (checkedAt - started > 12 * 60 * 60 * 1000) return false;
     let state;
     try { state = JSON.parse(readFileSync(stateFile, "utf8")); } catch { return false; }
     if (!state.open || state.runId !== expectedRunId) return false;
+    if (checkedAt - lastReport < reportIntervalMs) return true;
+    lastReport = checkedAt;
     try {
       await reportEvent(heartbeatEvent(state, expectedRunId));
     } catch {}
     return true;
   }
 
+  const configuredReportInterval = Number(process.env.LANTERNWATCH_HEARTBEAT_INTERVAL_MS);
+  const reportIntervalMs = Number.isFinite(configuredReportInterval) && configuredReportInterval >= 50 && configuredReportInterval <= 60_000
+    ? configuredReportInterval
+    : 60_000;
+  const configuredPollInterval = Number(process.env.LANTERNWATCH_HEARTBEAT_POLL_MS);
+  const pollIntervalMs = Number.isFinite(configuredPollInterval) && configuredPollInterval >= 25 && configuredPollInterval <= 1_000
+    ? configuredPollInterval
+    : 1_000;
   const timer = setInterval(async () => {
-    const keepRunning = await beat();
-    if (!keepRunning || process.env.LANTERNWATCH_HEARTBEAT_ONCE === "1") {
-      clearInterval(timer);
-      process.exit(0);
+    if (checking) return;
+    checking = true;
+    try {
+      const keepRunning = await poll();
+      if (!keepRunning || process.env.LANTERNWATCH_HEARTBEAT_ONCE === "1") {
+        clearInterval(timer);
+      }
+    } finally {
+      checking = false;
     }
-  }, 60_000);
+  }, pollIntervalMs);
   return timer;
 }
 

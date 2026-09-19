@@ -1,12 +1,12 @@
 {
-  "herald": "assets/pixellab/characters/herald/Idle/animations",
-  "guildmaster": "assets/pixellab/characters/guildmaster/Idle/animations",
-  "steward": "assets/pixellab/characters/steward/Idle/animations",
-  "pathfinder": "assets/pixellab/characters/pathfinder/Idle/animations",
-  "courier": "assets/pixellab/characters/courier/Idle/animations",
-  "archivist": "assets/pixellab/characters/archivist/Idle/animations",
-  "genealogist": "assets/pixellab/characters/genealogist/Idle/animations",
-  "chronicler": "assets/pixellab/characters/chronicler/Idle/animations",
-  "counselor": "assets/pixellab/characters/counselor/Idle/animations",
-  "assayer": "assets/pixellab/characters/assayer/Idle/animations"
+  "business-analyst": "assets/pixellab/characters/herald/Idle/animations",
+  "program-manager": "assets/pixellab/characters/guildmaster/Idle/animations",
+  "operations-coordinator": "assets/pixellab/characters/steward/Idle/animations",
+  "technical-researcher": "assets/pixellab/characters/pathfinder/Idle/animations",
+  "market-intelligence-analyst": "assets/pixellab/characters/courier/Idle/animations",
+  "systems-analyst": "assets/pixellab/characters/archivist/Idle/animations",
+  "change-management-analyst": "assets/pixellab/characters/genealogist/Idle/animations",
+  "technical-writer": "assets/pixellab/characters/chronicler/Idle/animations",
+  "strategy-consultant": "assets/pixellab/characters/counselor/Idle/animations",
+  "compliance-reviewer": "assets/pixellab/characters/assayer/Idle/animations"
 }

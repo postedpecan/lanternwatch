@@ -35,6 +35,7 @@ test("dashboard route exposes global scope by default and applies only valid pro
   const base = {
     runId: "shared",
     agent: "archivist",
+    from: "guildmaster",
     status: "working",
     message: "API fixture",
     quest: "API fixture",
@@ -47,6 +48,13 @@ test("dashboard route exposes global scope by default and applies only valid pro
   assert.equal(global.selectedProjectId, null);
   assert.equal(global.statistics.totalRuns, 2);
   assert.equal(global.agentActivities.length, 2);
+  assert.ok(global.agentActivities.every((activity) => activity.agent === "systems-analyst"));
+  assert.ok(global.recentEvents.every((event) => event.agent === "systems-analyst"));
+  assert.ok(global.recentEvents.every((event) => event.from === "program-manager"));
+  assert.equal(global.agentRunCounts["systems-analyst"], 2);
+  assert.equal(global.agentMetrics["systems-analyst"].runCount, 2);
+  assert.ok(global.agentWorkspacePaths.length >= 1);
+  assert.equal("archivist" in global.agentRunCounts, false);
 
   const project = global.projects.find((candidate) => candidate.name === "Route A");
   const filtered = await GET(new Request(`http://localhost/api/guild/dashboard?projectId=${project.id}`)).json();

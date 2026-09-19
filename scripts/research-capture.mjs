@@ -15,7 +15,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_RESEARCH_DATABASE = path.join(projectRoot, ".lanternwatch", "research.db");
 const DEFAULT_RESEARCH_VAULT = String.raw`D:\VibeCoding\Vibe Coding\Wiki\Lanternwatch`;
-const ROLES = new Set(["pathfinder", "courier"]);
+const RESEARCH_ROLE_ALIASES = new Map([
+  ["pathfinder", "technical-researcher"],
+  ["technical-researcher", "technical-researcher"],
+  ["courier", "market-intelligence-analyst"],
+  ["market-intelligence-analyst", "market-intelligence-analyst"],
+]);
+const RESEARCH_SCHEMA_VERSION = 2;
 const STATUSES = new Set(["complete", "incomplete"]);
 
 export function researchCapturePaths(environment = process.env) {
@@ -179,8 +185,11 @@ export function normalizeResearchRecord(input, now = new Date()) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("research payload must be an object");
   }
-  const role = requiredText(input.role, "role", 32).toLowerCase();
-  if (!ROLES.has(role)) throw new TypeError("role must be pathfinder or courier");
+  const suppliedRole = requiredText(input.role, "role", 64).toLowerCase();
+  const role = RESEARCH_ROLE_ALIASES.get(suppliedRole);
+  if (!role) {
+    throw new TypeError("role must be technical-researcher or market-intelligence-analyst");
+  }
   const status = requiredText(input.status, "status", 32).toLowerCase();
   if (!STATUSES.has(status)) throw new TypeError("status must be complete or incomplete");
   const capturedAt = now.toISOString();
@@ -214,52 +223,119 @@ function openResearchDatabase(databasePath) {
 }
 
 export function migrateResearchDatabase(database) {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS research_schema_migrations (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS research_records (
+  database.exec("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;");
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS research_schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS research_records (
+        id INTEGER PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('technical-researcher', 'market-intelligence-analyst')),
+        topic TEXT NOT NULL,
+        question TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete')),
+        summary TEXT NOT NULL,
+        findings_json TEXT NOT NULL,
+        caveats_json TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        note_filename TEXT NOT NULL UNIQUE,
+        export_status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (export_status IN ('pending', 'exported', 'failed')),
+        export_error TEXT,
+        exported_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    const roleConstraint = database.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_records'
+    `).get()?.sql || "";
+    if (roleConstraint.includes("'pathfinder'") || roleConstraint.includes("'courier'")) {
+      database.exec(`
+        CREATE TABLE research_records_v2 (
+          id INTEGER PRIMARY KEY,
+          task_id TEXT NOT NULL UNIQUE,
+          role TEXT NOT NULL CHECK (role IN ('technical-researcher', 'market-intelligence-analyst')),
+          topic TEXT NOT NULL,
+          question TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete')),
+          summary TEXT NOT NULL,
+          findings_json TEXT NOT NULL,
+          caveats_json TEXT NOT NULL,
+          started_at TEXT,
+          completed_at TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          note_filename TEXT NOT NULL UNIQUE,
+          export_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (export_status IN ('pending', 'exported', 'failed')),
+          export_error TEXT,
+          exported_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO research_records_v2 (
+          id, task_id, role, topic, question, status, summary, findings_json,
+          caveats_json, started_at, completed_at, captured_at, note_filename,
+          export_status, export_error, exported_at, created_at, updated_at
+        )
+        SELECT
+          id,
+          task_id,
+          CASE role
+            WHEN 'pathfinder' THEN 'technical-researcher'
+            WHEN 'courier' THEN 'market-intelligence-analyst'
+            ELSE role
+          END,
+          topic, question, status, summary, findings_json, caveats_json,
+          started_at, completed_at, captured_at, note_filename, export_status,
+          export_error, exported_at, created_at, updated_at
+        FROM research_records;
+        DROP TABLE research_records;
+        ALTER TABLE research_records_v2 RENAME TO research_records;
+      `);
+    }
+
+    database.exec(`
+      UPDATE research_records
+      SET role = CASE role
+        WHEN 'pathfinder' THEN 'technical-researcher'
+        WHEN 'courier' THEN 'market-intelligence-analyst'
+        ELSE role
+      END
+      WHERE role IN ('pathfinder', 'courier');
+      CREATE TABLE IF NOT EXISTS research_sources (
       id INTEGER PRIMARY KEY,
-      task_id TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL CHECK (role IN ('pathfinder', 'courier')),
-      topic TEXT NOT NULL,
-      question TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete')),
-      summary TEXT NOT NULL,
-      findings_json TEXT NOT NULL,
-      caveats_json TEXT NOT NULL,
-      started_at TEXT,
-      completed_at TEXT NOT NULL,
-      captured_at TEXT NOT NULL,
-      note_filename TEXT NOT NULL UNIQUE,
-      export_status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (export_status IN ('pending', 'exported', 'failed')),
-      export_error TEXT,
-      exported_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS research_sources (
-      id INTEGER PRIMARY KEY,
-      research_id INTEGER NOT NULL REFERENCES research_records(id) ON DELETE CASCADE,
-      url TEXT NOT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      publisher TEXT NOT NULL DEFAULT '',
-      published_at TEXT,
-      accessed_at TEXT,
-      excerpt TEXT NOT NULL DEFAULT '',
-      UNIQUE (research_id, url)
-    );
-    CREATE INDEX IF NOT EXISTS research_records_export_status_idx
-      ON research_records(export_status, captured_at);
-    CREATE INDEX IF NOT EXISTS research_sources_research_id_idx
-      ON research_sources(research_id);
-  `);
-  database.prepare(`
-    INSERT OR IGNORE INTO research_schema_migrations (version, applied_at)
-    VALUES (1, ?)
-  `).run(new Date().toISOString());
+        research_id INTEGER NOT NULL REFERENCES research_records(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        publisher TEXT NOT NULL DEFAULT '',
+        published_at TEXT,
+        accessed_at TEXT,
+        excerpt TEXT NOT NULL DEFAULT '',
+        UNIQUE (research_id, url)
+      );
+      CREATE INDEX IF NOT EXISTS research_records_export_status_idx
+        ON research_records(export_status, captured_at);
+      CREATE INDEX IF NOT EXISTS research_sources_research_id_idx
+        ON research_sources(research_id);
+    `);
+    database.prepare(`
+      INSERT OR IGNORE INTO research_schema_migrations (version, applied_at)
+      VALUES (?, ?)
+    `).run(RESEARCH_SCHEMA_VERSION, new Date().toISOString());
+    database.exec("COMMIT;");
+  } catch (error) {
+    database.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
 function insertRecord(database, record) {
