@@ -82,11 +82,12 @@ const runId = `${SOURCE}-${sessionId}-${turnId}`;
 const now = new Date().toISOString();
 const base = { projectPath: cwd, projectName: path.basename(cwd), runId, source: SOURCE, quest: `${HOST_LABEL} task`, occurredAt: now };
 
-// Codex sends the custom agent's selected type. Preserve it as the lifecycle
-// identity instead of collapsing user-owned agents into LanternWatch roles.
-const agentType = (eventName === "SubagentStart" || eventName === "SubagentStop")
-  ? canonicalAgentId(payload.agent_type) || safe(payload.agent_type, "unclassified-agent")
+// Keep the host-selected custom-agent identity for exact catalog attribution,
+// while continuing to report the canonical company role for metrics and runs.
+const rawAgentType = (eventName === "SubagentStart" || eventName === "SubagentStop")
+  ? safe(payload.agent_type, "unclassified-agent")
   : null;
+const agentType = rawAgentType ? canonicalAgentId(rawAgentType) || rawAgentType : null;
 
 const receipt = {
   at: now,
@@ -99,6 +100,7 @@ const receipt = {
 if (agentType) {
   receipt.agentInstanceId = safe(payload.agent_id, "agent");
   receipt.agent = agentType;
+  receipt.agentType = rawAgentType;
 }
 appendHookLog(receipt);
 
@@ -126,7 +128,7 @@ try {
   } else if (eventName === "SubagentStart" || eventName === "SubagentStop") {
     const agentId = safe(payload.agent_id, "agent");
     const status = eventName === "SubagentStart" ? "working" : "complete";
-    await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentType, agentInstanceId: agentId, status, message: status === "working" ? "A Codex agent began assigned work." : "A Codex agent finished assigned work." });
+    await reportEvent({ ...base, eventId: `hook-${eventName.toLowerCase()}-${sessionId}-${turnId}-${agentId}`, agent: agentType, agentType: rawAgentType, agentInstanceId: agentId, status, message: status === "working" ? "A Codex agent began assigned work." : "A Codex agent finished assigned work." });
   } else if (eventName === "SessionEnd") {
     const state = loadState(sessionId);
     if (state?.open) await reportEvent({ projectPath: state.cwd, projectName: path.basename(state.cwd), runId: state.runId, eventId: `hook-sessionend-${sessionId}`, source: SOURCE, agent: "program-manager", status: "interrupted", message: `The ${HOST_LABEL} session ended before the turn reported completion.`, quest: `${HOST_LABEL} task`, occurredAt: now, runComplete: true });

@@ -175,6 +175,7 @@ function ensureSchema(database: DatabaseSync) {
   const eventColumns = database.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>;
   if (!eventColumns.some((column) => column.name === "agent_instance_id")) database.exec("ALTER TABLE events ADD COLUMN agent_instance_id TEXT");
   if (!eventColumns.some((column) => column.name === "source_event_id")) database.exec("ALTER TABLE events ADD COLUMN source_event_id TEXT");
+  if (!eventColumns.some((column) => column.name === "agent_type")) database.exec("ALTER TABLE events ADD COLUMN agent_type TEXT");
   database.exec(`
     UPDATE runs SET source_run_id = id WHERE source_run_id IS NULL OR source_run_id = '';
     UPDATE events SET source_event_id = event_id WHERE source_event_id IS NULL OR source_event_id = '';
@@ -261,6 +262,10 @@ function safeAgent(value: unknown): string {
   return cleanText(value, "unknown-agent", 96).replace(/[^a-zA-Z0-9._:-]/g, "-");
 }
 
+function safeAgentType(value: unknown, fallback: string): string {
+  return cleanText(value, fallback, 96).replace(/[^a-zA-Z0-9._:-]/g, "-");
+}
+
 function safeStatus(value: unknown): RoomStatus {
   return typeof value === "string" && roomStatuses.has(value as RoomStatus)
     ? (value as RoomStatus)
@@ -302,6 +307,7 @@ function rowToEvent(row: Record<string, unknown>, startedAt: string): StoredGuil
     projectId: String(row.project_id),
     runId: String(row.run_id),
     agent: safeAgent(row.agent),
+    agentType: safeAgentType(row.agent_type, safeAgent(row.agent)),
     status: safeStatus(row.status),
     message: String(row.message),
     quest: row.quest ? String(row.quest) : null,
@@ -365,6 +371,7 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
   const projectId = projectIdFor(projectPath);
   const eventId = cleanText(input.eventId, randomUUID(), 160);
   const agent = safeAgent(input.agent);
+  const agentType = safeAgentType(input.agentType, agent);
   const status = safeStatus(input.status);
   const message = cleanText(input.message, `${agent} changed state to ${status}.`, 1000);
   const quest = cleanText(input.quest, "", 1000);
@@ -404,9 +411,9 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
     `).run(runId, projectId, sourceRunId, quest, runComplete ? "complete" : "working", occurredAt, runComplete ? occurredAt : null, receivedAt, outcome);
     result = database.prepare(`
       INSERT OR IGNORE INTO events
-        (event_id, source_event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(storedEventId, eventId, projectId, runId, agent, status, message, quest || null, from, occurredAt, receivedAt, cleanText(input.agentInstanceId, "", 180) || null);
+        (event_id, source_event_id, project_id, run_id, agent, agent_type, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(storedEventId, eventId, projectId, runId, agent, agentType, status, message, quest || null, from, occurredAt, receivedAt, cleanText(input.agentInstanceId, "", 180) || null);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -441,8 +448,10 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     storageRoot: storageRootPath(),
     allowedWorkspacePaths: [...projects.map((project) => project.path), process.cwd()],
   });
-  const presentationFor = (agent: string): AgentPresentation => {
-    const candidates = catalogResult.agents.filter((candidate) => candidate.codexReady && candidate.name.toLowerCase() === agent.toLowerCase());
+  const presentationFor = (agent: string, agentType = agent): AgentPresentation => {
+    const byIdentity = (identity: string) => catalogResult.agents.filter((candidate) => candidate.codexReady && candidate.name.toLowerCase() === identity.toLowerCase());
+    const exactCandidates = byIdentity(agentType);
+    const candidates = exactCandidates.length > 0 ? exactCandidates : byIdentity(agent);
     const enabled = candidates.filter((candidate) => candidate.enabled);
     if (enabled.length === 1) {
       const candidate = enabled[0];
@@ -539,7 +548,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const eventRows = run
     ? database.prepare("SELECT * FROM events WHERE run_id = ? AND project_id = ? ORDER BY occurred_at, id").all(run.id, run.projectId) as Record<string, unknown>[]
     : [];
-  const events = run ? eventRows.map((row) => ({ ...rowToEvent(row, run.startedAt), presentation: presentationFor(safeAgent(row.agent)) })) : [];
+  const events = run ? eventRows.map((row) => ({ ...rowToEvent(row, run.startedAt), presentation: presentationFor(safeAgent(row.agent), safeAgentType(row.agent_type, safeAgent(row.agent))) })) : [];
   const recentEventRows = (selectedProjectId ? database.prepare(`
     SELECT events.*, runs.started_at AS run_started_at
     FROM events JOIN runs ON runs.id = events.run_id
@@ -550,7 +559,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     FROM events JOIN runs ON runs.id = events.run_id
     ORDER BY events.occurred_at DESC, events.id DESC LIMIT 100
   `).all()) as Record<string, unknown>[];
-  const recentEvents = recentEventRows.map((row) => ({ ...rowToEvent(row, String(row.run_started_at)), presentation: presentationFor(safeAgent(row.agent)) }));
+  const recentEvents = recentEventRows.map((row) => ({ ...rowToEvent(row, String(row.run_started_at)), presentation: presentationFor(safeAgent(row.agent), safeAgentType(row.agent_type, safeAgent(row.agent))) }));
 
   const activityRows = (selectedProjectId ? database.prepare(`
     SELECT events.*, projects.name AS project_name
@@ -571,6 +580,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const activityById = new Map<string, ActivityState>();
   for (const row of activityRows) {
     const agent = safeAgent(row.agent);
+    const agentType = safeAgentType(row.agent_type, agent);
     const runId = String(row.run_id);
     const project = String(row.project_id);
     const instance = row.agent_instance_id ? String(row.agent_instance_id) : `legacy:${runId}:${agent}`;
@@ -582,6 +592,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
       id,
       agentInstanceId: instance,
       agent,
+      agentType,
       projectId: project,
       projectName: String(row.project_name),
       runId,
@@ -597,7 +608,7 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     .map(({ active: _active, ...activity }): GuildAgentActivity => ({
       ...activity,
       durationSeconds: Math.max(0, Math.floor((Date.parse(serverTime) - Date.parse(activity.startedAt)) / 1000)),
-      presentation: presentationFor(activity.agent),
+      presentation: presentationFor(activity.agent, activity.agentType),
     }))
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   for (const activity of agentActivities) metricFor(activity.agent).activeInstances += 1;

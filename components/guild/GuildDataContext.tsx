@@ -383,7 +383,7 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState(DEFAULT_QUEST);
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
   const [mode, setMode] = useState<DataMode>("live");
   const [projects, setProjects] = useState<GuildProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -417,7 +417,7 @@ export function GuildDataProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+    setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
   }, []);
 
   useEffect(() => {

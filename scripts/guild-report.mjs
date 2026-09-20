@@ -72,6 +72,7 @@ export function cliEvent(args) {
       ? String(option(args, "source")).toLowerCase()
       : undefined,
     agent,
+    agentType: option(args, "agent-type"),
     status: STATUSES.has(statusCandidate) ? statusCandidate : "working",
     message: clean(option(args, "message"), `${companyTitleForAgent(agent) || agent} changed state to ${statusCandidate}.`),
     quest: clean(option(args, "quest"), "Codex workspace activity"),
@@ -83,9 +84,13 @@ export function cliEvent(args) {
 }
 
 export function normalizeEventAgentIds(event) {
+  const agent = eventAgent(event?.agent);
   return {
     ...event,
-    agent: eventAgent(event?.agent),
+    agent,
+    agentType: event?.agentType === undefined || event?.agentType === null
+      ? agent
+      : identifier(event.agentType, agent),
     from: event?.from === undefined || event?.from === null ? undefined : eventAgent(event.from, "unknown-agent"),
   };
 }
@@ -118,6 +123,9 @@ function ensureSchema(database) {
   }
   if (!eventColumns.some((column) => column.name === "source_event_id")) {
     database.exec("ALTER TABLE events ADD COLUMN source_event_id TEXT");
+  }
+  if (!eventColumns.some((column) => column.name === "agent_type")) {
+    database.exec("ALTER TABLE events ADD COLUMN agent_type TEXT");
   }
   database.exec(`
     UPDATE runs SET source_run_id = id WHERE source_run_id IS NULL OR source_run_id = '';
@@ -202,7 +210,7 @@ export function writeDirect(event) {
   try {
     database.prepare("INSERT INTO projects (id, name, path, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, path = excluded.path, last_seen_at = excluded.last_seen_at").run(projectId, event.projectName, event.projectPath, receivedAt);
     database.prepare("INSERT INTO runs (id, project_id, source_run_id, quest, status, started_at, completed_at, updated_at, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quest = CASE WHEN excluded.quest <> '' THEN excluded.quest ELSE runs.quest END, status = CASE WHEN excluded.status = 'complete' THEN 'complete' ELSE runs.status END, completed_at = COALESCE(runs.completed_at, excluded.completed_at), updated_at = excluded.updated_at, outcome = COALESCE(excluded.outcome, runs.outcome)").run(runId, projectId, event.runId, event.quest, terminal ? "complete" : "working", event.occurredAt, terminal ? event.occurredAt : null, receivedAt, outcome);
-    database.prepare("INSERT OR IGNORE INTO events (event_id, source_event_id, project_id, run_id, agent, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(scopedStorageId("event", projectId, event.eventId), event.eventId, projectId, runId, event.agent, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
+    database.prepare("INSERT OR IGNORE INTO events (event_id, source_event_id, project_id, run_id, agent, agent_type, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(scopedStorageId("event", projectId, event.eventId), event.eventId, projectId, runId, event.agent, event.agentType, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");

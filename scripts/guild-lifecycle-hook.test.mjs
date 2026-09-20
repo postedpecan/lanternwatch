@@ -407,6 +407,31 @@ test("company-title task aliases produce canonical receipt and API identities", 
   }
 });
 
+test("workspace custom-agent identity remains available for catalog attribution", async () => {
+  const root = fixture("workspace-custom-agent");
+  const { server, bodies, url } = await startEventServer();
+  try {
+    const result = await runHook(JSON.stringify({
+      hook_event_name: "SubagentStart",
+      session_id: "session-workspace-agent",
+      turn_id: "turn-workspace-agent",
+      agent_id: "agent-workspace",
+      agent_type: "frontend-engineer-lanternwatch",
+      cwd: projectRoot,
+    }), isolatedEnvironment(root, url));
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].agent, "frontend-engineer");
+    assert.equal(bodies[0].agentType, "frontend-engineer-lanternwatch");
+    const receipt = JSON.parse(readFileSync(path.join(root, "logs", "hook.jsonl"), "utf8").trim());
+    assert.equal(receipt.agent, "frontend-engineer");
+    assert.equal(receipt.agentType, "frontend-engineer-lanternwatch");
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("malformed hook stdin records a parse receipt and remains non-blocking", async () => {
   const root = fixture("malformed-receipt");
   const result = await runHook("{not-json", isolatedEnvironment(root, "http://127.0.0.1:1/api/guild/events"));
@@ -483,6 +508,7 @@ test("reporter falls back to the isolated SQLite database after API failure", as
       projectName: "Lanternwatch",
       runId: "api-fallback-run",
       agent: "hookwright",
+      agentType: "platform-engineer-lanternwatch",
       status: "working",
       message: "Fixture API fallback.",
       quest: "Lifecycle test",
@@ -490,10 +516,11 @@ test("reporter falls back to the isolated SQLite database after API failure", as
     });
     assert.equal(destination, "sqlite");
     const database = new DatabaseSync(databasePath, { readOnly: true });
-    const row = database.prepare("SELECT source_event_id, agent FROM events WHERE source_event_id = ?").get("api-fallback-event");
+    const row = database.prepare("SELECT source_event_id, agent, agent_type FROM events WHERE source_event_id = ?").get("api-fallback-event");
     database.close();
     assert.equal(row.source_event_id, "api-fallback-event");
     assert.equal(row.agent, "platform-engineer");
+    assert.equal(row.agent_type, "platform-engineer-lanternwatch");
   } finally {
     if (previous.api === undefined) delete process.env.LANTERNWATCH_API_URL; else process.env.LANTERNWATCH_API_URL = previous.api;
     if (previous.database === undefined) delete process.env.LANTERNWATCH_DB_PATH; else process.env.LANTERNWATCH_DB_PATH = previous.database;

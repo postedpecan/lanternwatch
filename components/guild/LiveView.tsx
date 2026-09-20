@@ -7,6 +7,9 @@ import { formatAge, formatElapsed, formatMoment, titleCase } from "@/lib/guild-f
 import { describeHookDiagnostic } from "@/components/guild/hook-diagnostic";
 import { getDemoNextStepIndex, getFocusedWorkflowActivities } from "@/components/guild/workflow-activity";
 import { needsDelegationWarning } from "@/components/guild/delegation-warning";
+import { AGENT_COPY } from "@/components/guild/agent-copy";
+import { associateTeamStatusActivities } from "@/components/guild/team-status";
+import { partitionRosterDefinitions, rosterSectionTitle } from "@/components/guild/agent-roster";
 import {
   DEMO_TOTAL_DURATION_SECONDS,
   runtimeFor,
@@ -53,7 +56,7 @@ function AgentCatalogPanel({ agents, settings }: { agents: CatalogAgent[]; setti
     {error && <p className="catalog-error" role="alert">{error}</p>}
     <details className="catalog-settings"><summary>Catalog settings</summary><form onSubmit={saveSettings} className="catalog-settings-form"><label>Discovery<select name="discoveryMode" defaultValue={settings.discoveryMode}><option value="manual">Manual scan</option><option value="automatic">Automatic refresh</option><option value="watcher">Filesystem watcher</option></select></label><label>Same-name default<select name="collisionPolicy" defaultValue={settings.collisionPolicy}><option value="rename">Rename — recommended</option><option value="tag">Keep names; distinguish with tags</option><option value="disable">Disable one source</option></select></label><button type="submit" disabled={busy}>Save settings</button></form></details>
     <form className="catalog-create" onSubmit={submitCreate}><strong>Create agent</strong><label>Name<input name="name" required pattern="[a-z][a-z0-9_-]{0,63}" placeholder="release-helper" /></label><label>Description<input name="description" required maxLength={500} /></label><label>Developer instructions<textarea name="instructions" required rows={3} /></label><label>Custom tags<input name="tags" placeholder="release, trusted" /></label><label>Destination<select name="scope"><option value="global">Global Codex agents</option><option value="workspace">This workspace</option></select></label><button className="primary-btn" type="submit" disabled={busy}>Create agent</button></form>
-    <div className="catalog-list" role="list">{agents.length ? agents.map((agent) => <article className={`catalog-agent${agent.collision ? " collision" : ""}`} role="listitem" key={agent.id}><div className="catalog-agent-title"><div><strong>{agent.name}</strong><AgentTags presentation={{ scope: agent.scope, tags: agent.tags, unresolved: false }} /></div><span>{agent.enabled ? "On" : "Off"}</span></div><p>{agent.description}</p><code title={agent.sourcePath}>{agent.sourcePath}</code>{agent.collision && <p className="collision-copy"><strong>Same-name definitions found.</strong> Rename is recommended: it gives Codex and activity tracking an unambiguous identity. Tags keep names unchanged but cannot prove activity source; disabling one removes ambiguity but makes it unavailable in Codex.</p>}<div className="catalog-actions"><button type="button" disabled={busy} onClick={() => void request({ action: "toggle", sourcePath: agent.sourcePath, enabled: !agent.enabled })}>{agent.enabled ? "Turn off" : "Turn on"}</button><details><summary>Rename or tag</summary><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "rename", sourcePath: agent.sourcePath, name: data.get("name") }); }}><label>Rename<input name="name" defaultValue={agent.name} required pattern="[a-z][a-z0-9_-]{0,63}" /></label><button type="submit" disabled={busy}>Rename</button></form><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "tags", sourcePath: agent.sourcePath, tags: String(data.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean) }); }}><label>Tags<input name="tags" defaultValue={agent.tags.join(", ")} /></label><button type="submit" disabled={busy}>Save tags</button></form></details></div></article>) : <p className="catalog-empty">No user-owned Codex agents were found yet. Create one here or add a TOML file to your global or workspace agent folder.</p>}</div>
+    <div className="catalog-list" role="list">{agents.length ? agents.map((agent) => <article className={`catalog-agent${agent.collision ? " collision" : ""}`} role="listitem" key={agent.sourcePath}><div className="catalog-agent-title"><div><strong>{agent.name}</strong><AgentTags presentation={{ scope: agent.scope, tags: agent.tags, unresolved: false }} /></div><span>{agent.enabled ? "On" : "Off"}</span></div><p>{agent.description}</p><code title={agent.sourcePath}>{agent.sourcePath}</code>{agent.collision && <p className="collision-copy"><strong>Same-name definitions found.</strong> Rename is recommended: it gives Codex and activity tracking an unambiguous identity. Tags keep names unchanged but cannot prove activity source; disabling one removes ambiguity but makes it unavailable in Codex.</p>}<div className="catalog-actions"><button type="button" disabled={busy} onClick={() => void request({ action: "toggle", sourcePath: agent.sourcePath, enabled: !agent.enabled })}>{agent.enabled ? "Turn off" : "Turn on"}</button><details><summary>Rename or tag</summary><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "rename", sourcePath: agent.sourcePath, name: data.get("name") }); }}><label>Rename<input name="name" defaultValue={agent.name} required pattern="[a-z][a-z0-9_-]{0,63}" /></label><button type="submit" disabled={busy}>Rename</button></form><form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void request({ action: "tags", sourcePath: agent.sourcePath, tags: String(data.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean) }); }}><label>Tags<input name="tags" defaultValue={agent.tags.join(", ")} /></label><button type="submit" disabled={busy}>Save tags</button></form></details></div></article>) : <p className="catalog-empty">No user-owned Codex agents were found yet. Create one here or add a TOML file to your global or workspace agent folder.</p>}</div>
   </section>;
 }
 
@@ -172,53 +175,72 @@ function AgentRunList({
   activities,
   agentRunCounts,
   catalogAgents,
+  agentMetrics,
 }: {
   mode: DataMode;
   state: GuildState;
   activities: GuildAgentActivity[];
   agentRunCounts: Record<string, number>;
   catalogAgents: CatalogAgent[];
+  agentMetrics: Record<string, import("@/lib/guild-contract").AgentMetric>;
 }) {
   if (mode === "live") {
-    const activitiesByRole = new Map<string, GuildAgentActivity[]>();
-    for (const activity of activities) {
-      const roleActivities = activitiesByRole.get(activity.agent) ?? [];
-      roleActivities.push(activity);
-      activitiesByRole.set(activity.agent, roleActivities);
-    }
+    const { sections, unresolvedActivities } = associateTeamStatusActivities(partitionRosterDefinitions(catalogAgents, agentMetrics), catalogAgents, activities);
+    const renderDefinition = (definition: (typeof sections)[number]["definitions"][number]) => {
+      const { agent, metric, activities: definitionActivities } = definition;
+      // A catalog id is a case-insensitive path hash, so it is not a unique
+      // definition identity on Windows. Use the source path for both React's
+      // key and this heading association, matching activity attribution.
+      const definitionKey = agent.sourcePath;
+      // An IDREF cannot contain whitespace: source paths can, so encode the
+      // same stable identity before using it in the DOM.
+      const titleId = `agentGroup-${encodeURIComponent(definitionKey)}`;
+      return (
+        <section className={`agent-instance-group${definitionActivities.length ? " is-active" : " is-idle"}`} key={definitionKey} aria-labelledby={titleId}>
+          <div className="agent-instance-heading">
+            <div><h4 id={titleId}>{agent.name}</h4><AgentTags presentation={{ scope: agent.scope, tags: agent.tags, unresolved: false }} /></div>
+            <span>{definitionActivities.length ? `${definitionActivities.length} active` : "Idle"}</span>
+          </div>
+          <div role="list">
+            {definitionActivities.length ? definitionActivities.map((activity) => (
+              <div className={`agent-instance-row ${activity.status}`} role="listitem" key={activity.id}>
+                <div className="agent-instance-main">
+                  <div className="agent-instance-project">
+                    <strong>{activity.projectName}</strong>
+                    <span>{titleCase(activity.status)}{activity.status === "working" && <span className="loading-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}<AgentTags presentation={activity.presentation} /></span>
+                  </div>
+                  <p>{activity.message}</p>
+                </div>
+                <time dateTime={`PT${activity.durationSeconds}S`}>{formatElapsed(activity.durationSeconds)}</time>
+              </div>
+            )) : (
+              <div className="agent-idle-row" role="listitem">
+                <span>{agent.description}</span>
+                <small>Used in {metric.runCount} run{metric.runCount === 1 ? "" : "s"}</small>
+              </div>
+            )}
+          </div>
+        </section>
+      );
+    };
 
     return (
-      <div className="agent-instance-grid" aria-label="Codex agent status, project, activity, and runtime">
-        {[...new Map<string, CatalogAgent>([...catalogAgents.map((agent) => [agent.name, agent] as [string, CatalogAgent]), ...activities.map((activity) => [activity.agent, { id: activity.agent, name: activity.agent, description: "Observed lifecycle activity", scope: "global", sourcePath: "", enabled: true, tags: [], collision: false, readOnly: false, codexReady: false }] as [string, CatalogAgent])]).values()].map((agent) => {
-          const roleActivities = activitiesByRole.get(agent.name) ?? [];
-          return (
-            <section className={`agent-instance-group${roleActivities.length ? " is-active" : " is-idle"}`} key={agent.id} aria-labelledby={`agentGroup-${agent.id}`}>
-              <div className="agent-instance-heading">
-                <div><h3 id={`agentGroup-${agent.id}`}>{agent.name}</h3><AgentTags presentation={agent.sourcePath ? { scope: agent.scope, tags: agent.tags, unresolved: false } : undefined} /></div>
-                <span>{roleActivities.length ? `${roleActivities.length} active` : "Idle"}</span>
-              </div>
-              <div role="list">
-                {roleActivities.length ? roleActivities.map((activity) => (
-                  <div className={`agent-instance-row ${activity.status}`} role="listitem" key={activity.id}>
-                    <div className="agent-instance-main">
-                      <div className="agent-instance-project">
-                        <strong>{activity.projectName}</strong>
-                        <span>{titleCase(activity.status)}{activity.status === "working" && <span className="loading-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}<AgentTags presentation={activity.presentation} /></span>
-                      </div>
-                      <p>{activity.message}</p>
-                    </div>
-                    <time dateTime={`PT${activity.durationSeconds}S`}>{formatElapsed(activity.durationSeconds)}</time>
-                  </div>
-                )) : (
-                  <div className="agent-idle-row" role="listitem">
-                    <span>{agent.description}</span>
-                    <small>Used in {agentRunCounts[agent.name] ?? 0} run{agentRunCounts[agent.name] === 1 ? "" : "s"}</small>
-                  </div>
-                )}
-              </div>
-            </section>
-          );
+      <div className="agent-instance-sections" aria-label="Codex agent status, project, activity, and runtime">
+        {sections.map((section) => {
+          const title = section.workspacePath ? rosterSectionTitle(section) : AGENT_COPY.catalog.group[section.key];
+          const titleId = `agentStatusSection-${section.id}`;
+          return <section className="agent-instance-section" key={section.id} aria-labelledby={titleId}>
+            <div className="agent-instance-section-head"><h3 id={titleId}>{title}</h3><span>{section.definitions.length}</span></div>
+            <div className="agent-instance-grid" role="list">{section.definitions.map(renderDefinition)}</div>
+          </section>;
         })}
+        {unresolvedActivities.length > 0 && <section className="agent-instance-section agent-instance-unresolved" aria-labelledby="unresolvedAgentStatusTitle">
+          <div className="agent-instance-section-head"><h3 id="unresolvedAgentStatusTitle">Source unresolved</h3><span>{unresolvedActivities.length}</span></div>
+          <div className="agent-instance-grid" role="list">{unresolvedActivities.map((activity) => <section className={`agent-instance-group is-active`} key={activity.id} aria-labelledby={`unresolvedAgent-${activity.id}`}>
+            <div className="agent-instance-heading"><div><h4 id={`unresolvedAgent-${activity.id}`}>{activity.agent}</h4><AgentTags presentation={{ ...(activity.presentation ?? { tags: [] }), unresolved: true }} /></div><span>Active</span></div>
+            <div role="list"><div className={`agent-instance-row ${activity.status}`} role="listitem"><div className="agent-instance-main"><div className="agent-instance-project"><strong>{activity.projectName}</strong><span>{titleCase(activity.status)}{activity.status === "working" && <span className="loading-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}</span></div><p>{activity.message}</p></div><time dateTime={`PT${activity.durationSeconds}S`}>{formatElapsed(activity.durationSeconds)}</time></div></div>
+          </section>)}</div>
+        </section>}
       </div>
     );
   }
@@ -402,7 +424,12 @@ function RoleActivity({ mode, state, activities, catalogAgents }: { mode: DataMo
           const description = mode === "live" && instanceCount
             ? `${agent.name}: ${instanceCount} active instance${instanceCount === 1 ? "" : "s"}`
             : `${agent.name}: ${titleCase(status)}`;
-          return <span key={agent.id} className={`contribution-cell ${status}`} role="listitem" aria-label={description} title={description} />;
+          const contributionKey = mode === "live" ? (agent as CatalogAgent).sourcePath : agent.id;
+          // A catalog id is a case-insensitive path hash, so two preserved
+          // path spellings can share it on Windows. The source path is the
+          // definition identity used by the live roster and remains stable
+          // across status updates.
+          return <span key={contributionKey} className={`contribution-cell ${status}`} role="listitem" aria-label={description} title={description} />;
         })}
       </div>
       <div className="contribution-legend" aria-hidden="true">
@@ -444,6 +471,7 @@ export function LiveView() {
     recentEvents,
     agentActivities,
     agentRunCounts,
+    agentMetrics,
     agentCatalog,
     storageConnected,
     healthApiConnected,
@@ -480,7 +508,7 @@ export function LiveView() {
     <>
       {!hydrated && <p className="loading-banner" role="status">Loading local activity…</p>}
       <header className="hero">
-        <div><p className="kicker">Overview</p><h2>Your Codex agents, at a glance</h2><p className="hero-copy">LanternWatch detects your own global and workspace agents, then shows their real lifecycle activity with scope and custom tags.</p></div>
+        <div><p className="kicker">Overview</p><h1>Your Codex agents, at a glance</h1><p className="hero-copy">LanternWatch detects your own global and workspace agents, then shows their real lifecycle activity with scope and custom tags.</p></div>
         <div className="commission-box"><div className="commission-context"><span>Local catalog</span><span className={`storage-state ${storageConnected ? "connected" : ""}`}>{storageConnected ? "SQLite connected" : "Waiting for local API"}</span></div><p className="hint">Manage agents, tags, and collision settings on the Agents page. Codex needs a fresh session after agent-file changes.</p></div>
       </header>
 
@@ -523,7 +551,7 @@ export function LiveView() {
             </div>
             <OperationalDiagnostic dashboardConnected={storageConnected} healthApiConnected={healthApiConnected} health={storageHealth} />
             {delegationWarning && <p className="delegation-warning" role="status"><strong>No delegated specialist recorded.</strong> This terminal run has no recorded lifecycle event from an agent other than Program Manager. LanternWatch cannot tell whether a specialist worked without a recorded specialist event.</p>}
-            <AgentRunList mode={mode} state={state} activities={agentActivities} agentRunCounts={agentRunCounts} catalogAgents={agentCatalog} />
+            <AgentRunList mode={mode} state={state} activities={agentActivities} agentRunCounts={agentRunCounts} catalogAgents={agentCatalog} agentMetrics={agentMetrics} />
           </div>
         </article>
 

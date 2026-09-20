@@ -11,6 +11,7 @@ import { ageSeconds, parseLatestHookLog } from "../lib/guild-health.ts";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readProjectFile = (relativePath) => readFileSync(path.join(projectRoot, relativePath), "utf8");
+const workspaceAgentName = (role) => `${role}-lanternwatch`;
 
 const dossiers = {
   "business-analyst": "clarifier-agent.md",
@@ -49,19 +50,6 @@ test("every registered role has a dossier and workflow references", () => {
 
 test("every registered role has selective capability policy and a Codex custom-agent binding", () => {
   const capabilities = readProjectFile("Agents/capabilities.md");
-  const readOnlyAgents = new Set([
-    "business-analyst",
-    "program-manager",
-    "operations-coordinator",
-    "technical-researcher",
-    "market-intelligence-analyst",
-    "systems-analyst",
-    "change-management-analyst",
-    "technical-writer",
-    "strategy-consultant",
-    "compliance-reviewer",
-  ]);
-
   for (const agent of AGENT_IDS) {
     const heading = `## \`${agent}\``;
     const start = capabilities.indexOf(heading);
@@ -72,18 +60,15 @@ test("every registered role has selective capability policy and a Codex custom-a
     assert.match(section, /Fallback:/, `${agent} needs a fallback`);
     assert.match(section, /Do not:/, `${agent} needs an explicit capability boundary`);
 
-    const configPath = path.join(projectRoot, ".codex", "agents", `${agent}.toml`);
+    const name = workspaceAgentName(agent);
+    const configPath = path.join(projectRoot, ".codex", "agents", `${name}.toml`);
     assert.ok(existsSync(configPath), `${agent} custom-agent config is missing`);
     const config = readFileSync(configPath, "utf8");
-    assert.match(config, new RegExp(`^name = "${agent}"$`, "m"));
-    assert.match(config, /developer_instructions = """/);
+    assert.match(config, new RegExp(`^name = "${name}"$`, "m"));
+    assert.match(config, /^developer_instructions = (?:"""|")/m);
     assert.ok(config.includes(`Agents/${dossiers[agent]}`), `${agent} config must route to its dossier`);
     assert.ok(config.includes("Agents/capabilities.md"), `${agent} config must route to capability policy`);
-    if (readOnlyAgents.has(agent)) {
-      assert.match(config, /^sandbox_mode = "read-only"$/m, `${agent} must be read-only`);
-    } else {
-      assert.doesNotMatch(config, /^sandbox_mode\s*=/m, `${agent} must inherit the parent's permission mode`);
-    }
+    assert.doesNotMatch(config, /^sandbox_mode\s*=/m, `${agent} must inherit the parent's permission mode`);
   }
 });
 
@@ -121,6 +106,8 @@ test("lifecycle agent identity handles current and legacy task-name aliases", ()
   assert.equal(roleForAgentType("ledgerkeeper migration"), "data-engineer");
   assert.equal(roleForAgentType("prover_build"), "qa-engineer");
   assert.equal(roleForAgentType("technical-research"), "technical-researcher");
+  assert.equal(roleForAgentType("technical-researcher-lanternwatch"), "technical-researcher");
+  assert.equal(roleForAgentType("frontend-engineer-lanternwatch"), "frontend-engineer");
   assert.equal(roleForAgentType("unclassified-specialist"), "systems-analyst");
 });
 
@@ -151,6 +138,7 @@ test("company titles and task-name slugs normalize to matching canonical IDs", (
     assert.equal(canonicalAgentId(title), canonicalId, `${title} title`);
     assert.equal(canonicalAgentId(slug), canonicalId, `${slug} slug`);
     assert.equal(canonicalAgentId(taskName), canonicalId, `${taskName} task name`);
+    assert.equal(canonicalAgentId(`${canonicalId}-lanternwatch`), canonicalId, `${canonicalId} workspace custom agent`);
     assert.deepEqual(resolveAgentRole(title), { role: canonicalId, matched: true });
     assert.equal(roleForAgentType(taskName), canonicalId);
     assert.equal(canonicalAgentId(canonicalId), canonicalId, `${canonicalId} canonical ID`);
@@ -162,16 +150,27 @@ test("company titles and task-name slugs normalize to matching canonical IDs", (
   }
 });
 
-test("reporter normalization keeps company aliases out of stored and API identities", () => {
+test("reporter normalization preserves raw custom-agent identity alongside canonical roles", () => {
   assert.deepEqual(normalizeEventAgentIds({
     agent: "Frontend Engineer",
     from: "/root/program_manager_dispatch",
   }), {
     agent: "frontend-engineer",
+    agentType: "frontend-engineer",
+    from: "program-manager",
+  });
+  assert.deepEqual(normalizeEventAgentIds({
+    agent: "frontend-engineer-lanternwatch",
+    agentType: "frontend-engineer-lanternwatch",
+    from: "/root/program_manager_dispatch",
+  }), {
+    agent: "frontend-engineer",
+    agentType: "frontend-engineer-lanternwatch",
     from: "program-manager",
   });
   assert.deepEqual(normalizeEventAgentIds({ agent: "unknown", from: "unknown" }), {
     agent: "unknown",
+    agentType: "unknown",
     from: "unknown",
   });
 });

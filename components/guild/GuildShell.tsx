@@ -12,8 +12,9 @@ export function GuildShell({ children }: { children: ReactNode }) {
   return (
     <GuildDataProvider>
       <div className="shell">
+        <a className="skip-link" href="#main-content">Skip to main content</a>
         <TopBar />
-        <main className="profile-layout">
+        <main id="main-content" className="profile-layout" tabIndex={-1}>
           <div className="profile-content">{children}</div>
         </main>
       </div>

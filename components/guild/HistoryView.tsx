@@ -18,7 +18,7 @@ function StatisticsOverview({ statistics, scopeName }: { statistics: GuildStatis
     : "No activity";
   return (
     <section className="statistics-overview" aria-labelledby="statisticsTitle">
-      <div className="section-heading"><div><p className="kicker">History</p><h2 id="statisticsTitle">Run activity</h2></div><span>{scopeName === "All projects" ? "All saved runs across every project" : `Saved runs in ${scopeName}`}</span></div>
+      <div className="section-heading"><div><p className="kicker">History</p><h1 id="statisticsTitle">Run activity</h1></div><span>{scopeName === "All projects" ? "All saved runs across every project" : `Saved runs in ${scopeName}`}</span></div>
       <div className="stat-grid">
         <article className="stat-card"><span>Total runs</span><strong>{statistics.totalRuns}</strong><small>{statistics.activeRuns} active · {statistics.stalledRuns} stalled</small></article>
         <article className="stat-card"><span>Completion rate</span><strong>{statistics.completionRate}%</strong><small>{statistics.completedRuns} completed · {statistics.interruptedRuns} interrupted</small></article>

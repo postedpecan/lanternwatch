@@ -144,7 +144,7 @@ function main(args) {
   console.log(`${result.created} create, ${result.replaced} replace (backed up), ${result.unchanged} unchanged${dryRun ? "; no files written" : ""}.`);
   if (result.backupDirectory) console.log(`Backups: ${result.backupDirectory}`);
   if (dryRun) for (const file of result.files) console.log(`  ${file.action}: ${file.relative}`);
-  else console.log("Start a new Codex session to discover the personal agents. Project agents with the same name take precedence.");
+  else console.log("Start a new Codex session to discover the personal agents. Existing unrelated personal agent definitions were left untouched.");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

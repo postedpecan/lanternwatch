@@ -1,5 +1,6 @@
-export const APPEARANCE_VERSION = 1;
+export const APPEARANCE_VERSION = 2;
 export const APPEARANCE_STORAGE_KEY = `lanternwatch-appearance-v${APPEARANCE_VERSION}`;
+export const LEGACY_APPEARANCE_STORAGE_KEY = "lanternwatch-appearance-v1";
 
 export type AppearanceTheme = "light" | "dark";
 export type AppearanceCategory = "surface" | "text" | "accent" | "success" | "warning" | "danger";
@@ -26,20 +27,20 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   version: APPEARANCE_VERSION,
   palettes: {
     light: {
-      surface: "#ffffff",
-      text: "#1f2328",
-      accent: "#0969da",
-      success: "#1a7f37",
-      warning: "#9a6700",
-      danger: "#cf222e",
+      surface: "#f4f1e8",
+      text: "#1b211c",
+      accent: "#4a6b16",
+      success: "#2f6d44",
+      warning: "#855f09",
+      danger: "#a84237",
     },
     dark: {
-      surface: "#0d1117",
-      text: "#e6edf3",
-      accent: "#4493f8",
-      success: "#3fb950",
-      warning: "#d29922",
-      danger: "#f85149",
+      surface: "#18130e",
+      text: "#f8f2e7",
+      accent: "#ffc857",
+      success: "#78d39c",
+      warning: "#ff9f43",
+      danger: "#ff7a6e",
     },
   },
 };
@@ -171,9 +172,57 @@ export function parseAppearance(raw: string | null): AppearancePreferences {
   }
 }
 
-export function loadAppearance(storage: Pick<Storage, "getItem">): AppearancePreferences {
+type AppearanceStorage = Pick<Storage, "getItem"> & Partial<Pick<Storage, "setItem" | "removeItem">>;
+
+function parseLegacyAppearance(raw: string | null): AppearancePreferences | null {
+  if (!raw) return null;
   try {
-    return parseAppearance(storage.getItem(APPEARANCE_STORAGE_KEY));
+    const candidate = JSON.parse(raw) as {
+      version?: unknown;
+      palettes?: { light?: unknown; dark?: unknown };
+    };
+    if (candidate.version !== 1 || !candidate.palettes || typeof candidate.palettes !== "object") {
+      return null;
+    }
+    return {
+      version: APPEARANCE_VERSION,
+      palettes: {
+        light: parsePalette(candidate.palettes.light, DEFAULT_APPEARANCE.palettes.light),
+        dark: { ...DEFAULT_APPEARANCE.palettes.dark },
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function hasCurrentAppearance(raw: string | null) {
+  if (!raw) return false;
+  try {
+    const candidate = JSON.parse(raw) as Partial<AppearancePreferences>;
+    return candidate.version === APPEARANCE_VERSION && Boolean(candidate.palettes);
+  } catch {
+    return false;
+  }
+}
+
+export function loadAppearance(storage: AppearanceStorage): AppearancePreferences {
+  try {
+    const current = storage.getItem(APPEARANCE_STORAGE_KEY);
+    if (hasCurrentAppearance(current)) return parseAppearance(current);
+
+    const migrated = parseLegacyAppearance(storage.getItem(LEGACY_APPEARANCE_STORAGE_KEY));
+    if (!migrated) return cloneDefaults();
+
+    if (storage.setItem) {
+      try {
+        storage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(migrated));
+        storage.removeItem?.(LEGACY_APPEARANCE_STORAGE_KEY);
+      } catch {
+        // The migrated palette still applies for this session when storage is blocked.
+      }
+    }
+    return migrated;
   } catch {
     return cloneDefaults();
   }
@@ -221,14 +270,15 @@ export function applyPalette(style: StyleTarget, palette: SemanticPalette) {
 
 export function getAppearanceInitializerScript() {
   const key = JSON.stringify(APPEARANCE_STORAGE_KEY);
+  const legacyKey = JSON.stringify(LEGACY_APPEARANCE_STORAGE_KEY);
   const defaults = JSON.stringify(DEFAULT_APPEARANCE.palettes);
   const variables = JSON.stringify(PALETTE_VARIABLES);
   return `
   (function () {
-    var theme = "light";
+    var theme = "dark";
     var defaults = ${defaults};
     var variables = ${variables};
-    var savedPalette = null;
+    var savedAppearance = null;
     var validHex = /^#[0-9a-f]{6}$/i;
     function rgb(hex) {
       return [
@@ -295,16 +345,41 @@ export function getAppearanceInitializerScript() {
         danger: ensureReadable(candidate("danger"), surface, 4.5)
       };
     }
+    function readStored(key) {
+      try {
+        return JSON.parse(localStorage.getItem(key) || "null");
+      } catch (_) {
+        return null;
+      }
+    }
     try {
-      theme = localStorage.getItem("lanternwatch-theme") === "dark" ? "dark" : "light";
-      var saved = JSON.parse(localStorage.getItem(${key}) || "null");
-      if (saved && saved.version === ${APPEARANCE_VERSION} && saved.palettes &&
-          saved.palettes[theme] && typeof saved.palettes[theme] === "object") {
-        savedPalette = saved.palettes[theme];
+      theme = localStorage.getItem("lanternwatch-theme") === "light" ? "light" : "dark";
+      var current = readStored(${key});
+      if (current && current.version === ${APPEARANCE_VERSION} && current.palettes) {
+        savedAppearance = current;
+      } else {
+        var legacy = readStored(${legacyKey});
+        if (legacy && legacy.version === 1 && legacy.palettes && typeof legacy.palettes === "object") {
+          savedAppearance = {
+            version: ${APPEARANCE_VERSION},
+            palettes: {
+              light: normalize(legacy.palettes.light || {}, defaults.light),
+              dark: defaults.dark
+            }
+          };
+          try {
+            localStorage.setItem(${key}, JSON.stringify(savedAppearance));
+            localStorage.removeItem(${legacyKey});
+          } catch (_) {}
+        }
       }
     } catch (_) {}
     document.documentElement.dataset.theme = theme;
-    var palette = normalize(Object.assign({}, defaults[theme], savedPalette || {}), defaults[theme]);
+    var savedPalette = savedAppearance && savedAppearance.palettes &&
+      savedAppearance.palettes[theme] && typeof savedAppearance.palettes[theme] === "object"
+      ? savedAppearance.palettes[theme]
+      : {};
+    var palette = normalize(Object.assign({}, defaults[theme], savedPalette), defaults[theme]);
     Object.keys(variables).forEach(function (category) {
       var value = palette[category];
       document.documentElement.style.setProperty(variables[category], value);

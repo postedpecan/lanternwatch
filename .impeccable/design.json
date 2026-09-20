@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-20T08:06:50.7605676Z",
+  "title": "Design System: Lanternwatch",
+  "extensions": {
+    "colorMeta": {
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Charcoal Brown",
+        "canonical": "#18130E",
+        "tonalRamp": ["hsl(30 26% 15%)", "hsl(30 26% 25%)", "hsl(30 26% 35%)", "hsl(30 26% 45%)", "hsl(30 26% 55%)", "hsl(30 26% 68%)", "hsl(30 26% 82%)", "hsl(30 26% 95%)"]
+      },
+      "dark-text": {
+        "role": "neutral",
+        "displayName": "Warm Parchment",
+        "canonical": "#F8F2E7",
+        "tonalRamp": ["hsl(39 55% 15%)", "hsl(39 55% 25%)", "hsl(39 55% 35%)", "hsl(39 55% 45%)", "hsl(39 55% 55%)", "hsl(39 55% 68%)", "hsl(39 55% 82%)", "hsl(39 55% 95%)"]
+      },
+      "dark-accent": {
+        "role": "primary",
+        "displayName": "Lantern Amber",
+        "canonical": "#FFC857",
+        "tonalRamp": ["hsl(40 100% 15%)", "hsl(40 100% 25%)", "hsl(40 100% 35%)", "hsl(40 100% 45%)", "hsl(40 100% 55%)", "hsl(40 100% 68%)", "hsl(40 100% 82%)", "hsl(40 100% 95%)"]
+      },
+      "dark-success": {
+        "role": "secondary",
+        "displayName": "Signal Green",
+        "canonical": "#78D39C",
+        "tonalRamp": ["hsl(144 50% 15%)", "hsl(144 50% 25%)", "hsl(144 50% 35%)", "hsl(144 50% 45%)", "hsl(144 50% 55%)", "hsl(144 50% 68%)", "hsl(144 50% 82%)", "hsl(144 50% 95%)"]
+      },
+      "dark-warning": {
+        "role": "tertiary",
+        "displayName": "Working Orange",
+        "canonical": "#FF9F43",
+        "tonalRamp": ["hsl(29 100% 15%)", "hsl(29 100% 25%)", "hsl(29 100% 35%)", "hsl(29 100% 45%)", "hsl(29 100% 55%)", "hsl(29 100% 68%)", "hsl(29 100% 82%)", "hsl(29 100% 95%)"]
+      },
+      "dark-danger": {
+        "role": "tertiary",
+        "displayName": "Failure Coral",
+        "canonical": "#FF7A6E",
+        "tonalRamp": ["hsl(5 100% 15%)", "hsl(5 100% 25%)", "hsl(5 100% 35%)", "hsl(5 100% 45%)", "hsl(5 100% 55%)", "hsl(5 100% 68%)", "hsl(5 100% 82%)", "hsl(5 100% 95%)"]
+      },
+      "light-surface": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#f4f1e8",
+        "tonalRamp": ["hsl(45 35% 15%)", "hsl(45 35% 25%)", "hsl(45 35% 35%)", "hsl(45 35% 45%)", "hsl(45 35% 55%)", "hsl(45 35% 68%)", "hsl(45 35% 82%)", "hsl(45 35% 95%)"]
+      },
+      "light-text": {
+        "role": "neutral",
+        "displayName": "Ink Green",
+        "canonical": "#1b211c",
+        "tonalRamp": ["hsl(130 10% 15%)", "hsl(130 10% 25%)", "hsl(130 10% 35%)", "hsl(130 10% 45%)", "hsl(130 10% 55%)", "hsl(130 10% 68%)", "hsl(130 10% 82%)", "hsl(130 10% 95%)"]
+      },
+      "light-accent": {
+        "role": "primary",
+        "displayName": "Moss Accent",
+        "canonical": "#4a6b16",
+        "tonalRamp": ["hsl(83 67% 15%)", "hsl(83 67% 25%)", "hsl(83 67% 35%)", "hsl(83 67% 45%)", "hsl(83 67% 55%)", "hsl(83 67% 68%)", "hsl(83 67% 82%)", "hsl(83 67% 95%)"]
+      },
+      "light-success": {
+        "role": "secondary",
+        "displayName": "Forest Signal",
+        "canonical": "#2f6d44",
+        "tonalRamp": ["hsl(140 40% 15%)", "hsl(140 40% 25%)", "hsl(140 40% 35%)", "hsl(140 40% 45%)", "hsl(140 40% 55%)", "hsl(140 40% 68%)", "hsl(140 40% 82%)", "hsl(140 40% 95%)"]
+      },
+      "light-warning": {
+        "role": "tertiary",
+        "displayName": "Ochre Warning",
+        "canonical": "#855f09",
+        "tonalRamp": ["hsl(42 87% 15%)", "hsl(42 87% 25%)", "hsl(42 87% 35%)", "hsl(42 87% 45%)", "hsl(42 87% 55%)", "hsl(42 87% 68%)", "hsl(42 87% 82%)", "hsl(42 87% 95%)"]
+      },
+      "light-danger": {
+        "role": "tertiary",
+        "displayName": "Brick Danger",
+        "canonical": "#a84237",
+        "tonalRamp": ["hsl(6 51% 15%)", "hsl(6 51% 25%)", "hsl(6 51% 35%)", "hsl(6 51% 45%)", "hsl(6 51% 55%)", "hsl(6 51% 68%)", "hsl(6 51% 82%)", "hsl(6 51% 95%)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Operational Display", "purpose": "Page-level headings with compact responsive scale.", "fontFamily": "FiraCode Nerd Font", "weights": [400, 500, 600, 700] },
+      "title": { "displayName": "Panel Title", "purpose": "Panel, card, roster, and dialog headings.", "fontFamily": "FiraCode Nerd Font", "weights": [400, 500, 600, 700] },
+      "body": { "displayName": "Product Body", "purpose": "Default readable product copy.", "fontFamily": "FiraCode Nerd Font", "weights": [400, 500, 600, 700] },
+      "label": { "displayName": "Dense Label", "purpose": "Controls, metadata, and state annotations.", "fontFamily": "FiraCode Nerd Font", "weights": [400, 500, 600, 700] },
+      "mono": { "displayName": "Runtime Fact", "purpose": "Identifiers, paths, counts, timestamps, and durations.", "fontFamily": "FiraCode Nerd Font Mono", "weights": [400, 600] }
+    },
+    "shadows": [
+      { "name": "major-glass", "value": "inset 0 1px 0 color-mix(in srgb, #ffffff 10%, transparent), 0 18px 42px rgb(5 2 1 / .24)", "purpose": "Primary cards and major work regions in dark mode." },
+      { "name": "secondary-glass", "value": "inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent), 0 12px 30px rgb(5 2 1 / .18)", "purpose": "Compact operational cards in dark mode." },
+      { "name": "popover-glass", "value": "inset 0 1px 0 color-mix(in srgb, #ffffff 11%, transparent), 0 16px 38px rgb(5 2 1 / .32)", "purpose": "Temporary floating panels in dark mode." },
+      { "name": "dialog-glass", "value": "inset 0 1px 0 color-mix(in srgb, #ffffff 10%, transparent), 0 20px 50px rgb(5 2 1 / .4)", "purpose": "Modal depth over the dark backdrop." }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": "160ms ease", "purpose": "Borders, backgrounds, shadows, and text color on interactive controls." },
+      { "name": "progress-transition", "value": "220ms ease-out", "purpose": "Measured progress-width changes." },
+      { "name": "live-pulse", "value": "1.6s ease-in-out infinite", "purpose": "Recorded live or working indicators only." },
+      { "name": "reduced-motion", "value": ".001ms, one iteration", "purpose": "Global reduced-motion fallback." }
+    ],
+    "breakpoints": [
+      { "name": "workspace-stack", "value": "900px" },
+      { "name": "compact-page", "value": "760px" },
+      { "name": "mobile", "value": "480px" },
+      { "name": "narrow-mobile", "value": "380px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Standard submit action using the success signal without borrowing the selection accent.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Start run</button>",
+      "css": ".ds-btn-primary { padding: 6px 12px; border: 1px solid color-mix(in srgb, var(--success) 80%, var(--fg)); border-radius: 6px; color: var(--canvas); background: var(--success); box-shadow: var(--shadow); font: 600 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, color 160ms ease; } .ds-btn-primary:hover { filter: brightness(.94); } .ds-btn-primary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Accent Confirmation",
+      "kind": "button",
+      "refersTo": "button-accent",
+      "description": "Agent-management confirmation using the amber selection accent.",
+      "html": "<button class=\"ds-btn-accent\" type=\"button\">Save agent</button>",
+      "css": ".ds-btn-accent { padding: 6px 8px; border: 1px solid var(--accent); border-radius: 6px; color: var(--canvas); background: var(--accent); font: 600 11px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: filter 160ms ease, box-shadow 160ms ease; } .ds-btn-accent:hover { filter: brightness(.94); } .ds-btn-accent:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; } .ds-btn-accent:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Active Navigation Tab",
+      "kind": "nav",
+      "refersTo": "navigation-active",
+      "description": "Current route identified by amber text and a narrow underline.",
+      "html": "<a class=\"ds-nav-active\" href=\"#\" aria-current=\"page\">Agents</a>",
+      "css": ".ds-nav-active { position: relative; display: inline-flex; align-items: center; padding: 9px 10px 8px; color: var(--accent); font: 650 13px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; text-decoration: none; white-space: nowrap; } .ds-nav-active::after { content: \"\"; position: absolute; right: 8px; bottom: -1px; left: 8px; height: 2px; border-radius: 2px; background: var(--accent); } .ds-nav-active:hover { border-radius: 6px 6px 0 0; background: var(--canvas-subtle); } .ds-nav-active:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }"
+    },
+    {
+      "name": "Dense Text Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Opaque field for readable input inside glass containers.",
+      "html": "<label class=\"ds-field-label\">Agent name<input class=\"ds-input\" value=\"technical-researcher\" /></label>",
+      "css": ".ds-field-label { display: grid; gap: 4px; color: var(--muted); font: 600 11px/1.2 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-input { min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--fg); background: var(--canvas); font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; transition: border-color 160ms ease, box-shadow 160ms ease; } .ds-input:hover { border-color: color-mix(in srgb, var(--fg) 35%, var(--border)); } .ds-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; } .ds-input[aria-invalid=\"true\"] { border-color: var(--danger); }"
+    },
+    {
+      "name": "Runtime Status Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "Compact semantic status paired with explicit text.",
+      "html": "<span class=\"ds-status-chip\"><span class=\"ds-status-dot\" aria-hidden=\"true\"></span>Live</span>",
+      "css": ".ds-status-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--success); background: var(--canvas); font: 600 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }"
+    },
+    {
+      "name": "Major Glass Card",
+      "kind": "card",
+      "refersTo": "glass-card",
+      "description": "One liquid-glass boundary around a compact operational module.",
+      "html": "<article class=\"ds-glass-card\"><strong>Current occupancy</strong><p>Recorded active windows appear here.</p></article>",
+      "css": ".ds-glass-card { padding: 12px; border: 1px solid var(--glass-edge); border-radius: var(--major-radius); color: var(--fg); background: var(--major-surface); box-shadow: var(--major-shadow); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-glass-card strong { display: block; font-size: 14px; } .ds-glass-card p { margin: 4px 0 0; color: var(--muted); font-size: 12px; } @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .ds-glass-card { background: color-mix(in srgb, var(--palette-surface) 93%, var(--palette-text)); -webkit-backdrop-filter: none; backdrop-filter: none; } } @media (prefers-reduced-transparency: reduce) { .ds-glass-card { background: color-mix(in srgb, var(--palette-surface) 97%, var(--palette-text)); -webkit-backdrop-filter: none; backdrop-filter: none; } } @media (forced-colors: active) { .ds-glass-card { border-color: CanvasText; color: CanvasText; background: Canvas; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; } }"
+    },
+    {
+      "name": "Glass Dialog",
+      "kind": "custom",
+      "refersTo": "glass-dialog",
+      "description": "Modal surface with the strongest glass depth and opaque form content.",
+      "html": "<div class=\"ds-dialog\" role=\"dialog\" aria-labelledby=\"ds-dialog-title\"><div class=\"ds-dialog-head\"><strong id=\"ds-dialog-title\">Edit agent</strong><button class=\"ds-dialog-close\" type=\"button\" aria-label=\"Close\">×</button></div><p>Agent settings remain readable on an opaque inner field.</p></div>",
+      "css": ".ds-dialog { width: min(420px, 100%); overflow: hidden; border: 1px solid var(--glass-edge); border-radius: var(--dialog-radius); color: var(--fg); background: var(--dialog-surface); box-shadow: var(--dialog-shadow); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 12px; border-bottom: 1px solid var(--border); background: var(--panel-cap); } .ds-dialog p { margin: 0; padding: 12px; color: var(--muted); font-size: 12px; } .ds-dialog-close { width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 5px; color: var(--fg); background: var(--canvas); cursor: pointer; } .ds-dialog-close:hover { background: var(--neutral-hover); } .ds-dialog-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; } @media (prefers-reduced-transparency: reduce) { .ds-dialog { background: var(--palette-surface); -webkit-backdrop-filter: none; backdrop-filter: none; } } @media (forced-colors: active) { .ds-dialog { border-color: CanvasText; color: CanvasText; background: Canvas; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; } .ds-dialog-head { background: Canvas; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Amber Field Report",
+    "overview": "Lanternwatch is a dark amber liquid-glass operational console. It should feel like a precise field report: compact, layered, and candid about what the runtime actually recorded. Warm off-white text carries the hierarchy over a charcoal-brown field; amber marks focus and selection without becoming a decorative wash.\n\nGlass is a material for the outer structure, not every object. The sticky header, navigation, major cards, popovers, and dialogs receive translucent depth. Dense controls, rows, tables, and nested data regions stay opaque enough to scan. The light theme remains the accepted warm-paper baseline rather than imitating the dark glass treatment.",
+    "keyCharacteristics": [
+      "Dark-first charcoal-brown field with restrained amber light.",
+      "Translucent glass only on major surfaces; dense data stays opaque.",
+      "Compact operational density with truthful semantic status colors.",
+      "Visible keyboard focus, responsive stacking, and explicit low-transparency fallbacks."
+    ],
+    "rules": [
+      { "name": "The Semantic Signal Rule", "body": "Accent indicates selection and focus; success, warning, and danger retain their own roles and must not be collapsed into amber.", "section": "colors" },
+      { "name": "The Recorded-Fact Rule", "body": "Color may clarify stored lifecycle data, but it must not imply forecasts, success rates, historical concurrency, or other unrecorded telemetry.", "section": "colors" },
+      { "name": "The Runtime-Fact Rule", "body": "Use monospace where alignment or literal identity improves verification, never as the general display voice.", "section": "typography" },
+      { "name": "The One Glass Layer Rule", "body": "Apply glass to the containing major surface; keep dense nested controls and rows opaque instead of stacking blur on blur.", "section": "elevation" },
+      { "name": "The Legible Fallback Rule", "body": "When backdrop filtering is unavailable or reduced transparency is requested, replace translucent fills with 93-98% opaque derived surfaces and remove blur. In forced colors, use system canvas/text colors, borders, and no shadows.", "section": "elevation" }
+    ],
+    "dos": [
+      "**Do** use liquid glass for the sticky chrome, major cards, popovers, and dialogs.",
+      "**Do** keep dense controls, rows, and nested data regions opaque and scan-friendly.",
+      "**Do** preserve the exact semantic role separation between accent, success, warning, and danger.",
+      "**Do** retain no-blur, reduced-transparency, reduced-motion, and forced-colors behavior.",
+      "**Do** let long paths and names wrap or stack, with accessible full-text labels where truncation remains necessary."
+    ],
+    "donts": [
+      "**Don't** stack multiple translucent layers inside a glass card.",
+      "**Don't** use decorative charts or status marks that imply telemetry the product did not record.",
+      "**Don't** use amber as a substitute for success, warning, or danger.",
+      "**Don't** allow surface polish to weaken focus visibility, text contrast, or readable empty states.",
+      "**Don't** copy reference artwork or text, or introduce generated imagery or image-embedded text."
+    ]
+  }
+}

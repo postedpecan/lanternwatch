@@ -8,6 +8,15 @@ import test from "node:test";
 import { installCodexAgents, parseAgentDefinition, resolveCodexHome } from "./install-codex-agents.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const workspaceAgentFilename = (role) => {
+  const workspace = `${role}-lanternwatch.toml`;
+  const legacy = `${role}.toml`;
+  const directory = path.join(root, ".codex", "agents");
+  if (existsSync(path.join(directory, workspace))) return workspace;
+  if (existsSync(path.join(directory, legacy))) return legacy;
+  throw new Error(`Missing ${role} workspace agent definition.`);
+};
+
 function fixture(t) {
   const temp = mkdtempSync(path.join(tmpdir(), "lanternwatch-agents-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -48,7 +57,7 @@ test("repeat is unchanged; replacements back up both native definitions and doss
   assert.equal(existsSync(path.join(codexHome, "Lanternwatch", "backups")), false);
   const preserved = ["AGENTS.md", "config.toml", "hooks.json", "agents/custom.toml", "Lanternwatch/Agents/custom.md"];
   for (const file of preserved) writeFileSync(path.join(codexHome, file), `existing ${file}`);
-  const replaced = ["agents/platform-engineer.toml", "Lanternwatch/Agents/preferences.md"];
+  const replaced = [path.join("agents", workspaceAgentFilename("platform-engineer")), "Lanternwatch/Agents/preferences.md"];
   for (const file of replaced) writeFileSync(path.join(codexHome, file), `old ${file}`);
   const updated = installCodexAgents({ codexHome });
   assert.equal(updated.replaced, 2);
@@ -63,7 +72,7 @@ test("CLI dry run does not create its destination or replace existing files", (t
   assert.match(run.stdout, /14 Codex agents/);
   assert.equal(existsSync(codexHome), false);
   installCodexAgents({ codexHome });
-  const file = path.join(codexHome, "agents", "platform-engineer.toml");
+  const file = path.join(codexHome, "agents", workspaceAgentFilename("platform-engineer"));
   writeFileSync(file, "keep me");
   const preview = installCodexAgents({ codexHome, dryRun: true });
   assert.equal(preview.replaced, 1);
@@ -82,10 +91,15 @@ test("source validation rejects malformed TOML or missing references before writ
   const sourceRoot = path.join(temp, "source");
   cpSync(path.join(root, "Agents"), path.join(sourceRoot, "Agents"), { recursive: true });
   cpSync(path.join(root, ".codex", "agents"), path.join(sourceRoot, ".codex", "agents"), { recursive: true });
-  const file = path.join(sourceRoot, ".codex", "agents", "technical-writer.toml");
+  const file = path.join(sourceRoot, ".codex", "agents", workspaceAgentFilename("technical-writer"));
   const original = readFileSync(file, "utf8");
   const codexHome = path.join(temp, "destination");
-  for (const bad of [original + '\nname = "duplicate"\n', original.replace('developer_instructions = """', 'developer_instructions = ""'), original.replace("Agents/chronicle-writer-agent.md", "Agents/missing-agent.md"), original.replace("From the repository root", "Unexpected introduction")]) {
+  for (const bad of [
+    original + '\nname = "duplicate"\n',
+    original.replace(/^developer_instructions = .+$/m, 'developer_instructions = ""'),
+    original.replace("Agents/chronicle-writer-agent.md", "Agents/missing-agent.md"),
+    original.replace("From the repository root", "Unexpected introduction"),
+  ]) {
     writeFileSync(file, bad);
     assert.throws(() => installCodexAgents({ sourceRoot, codexHome }));
     assert.equal(existsSync(codexHome), false);
@@ -102,7 +116,7 @@ test("TOML escapes round-trip without truncating multiline instructions", () => 
 
 test("unexpected target types and repository-local destination fail before installing", (t) => {
   const codexHome = fixture(t);
-  mkdirSync(path.join(codexHome, "agents", "technical-writer.toml"), { recursive: true });
+  mkdirSync(path.join(codexHome, "agents", workspaceAgentFilename("technical-writer")), { recursive: true });
   assert.throws(() => installCodexAgents({ codexHome }), /target type/);
   assert.equal(existsSync(path.join(codexHome, "Lanternwatch")), false);
   assert.throws(() => installCodexAgents({ codexHome: path.join(root, ".codex") }), /personal Codex home/);

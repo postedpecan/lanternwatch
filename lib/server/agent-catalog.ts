@@ -5,7 +5,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSy
 import { homedir } from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { CatalogAction, CatalogAgent, CatalogSettings } from "@/lib/guild-contract";
+import type { CatalogAction, CatalogAgent, CatalogResponse, CatalogSettings, CatalogWorkspaceSnapshot } from "@/lib/guild-contract";
 
 export type { CatalogAction } from "@/lib/guild-contract";
 
@@ -13,6 +13,16 @@ type CatalogDependencies = {
   database: DatabaseSync;
   storageRoot: string;
   allowedWorkspacePaths: string[];
+  /** Test-only seam for filesystem identity rules; production uses process.platform. */
+  platform?: NodeJS.Platform;
+};
+
+type CatalogOrigin = NonNullable<CatalogAgent["origin"]>;
+type SnapshotDefinition = {
+  sourcePath: string;
+  source: string;
+  name: string;
+  description: string;
 };
 
 const DEFAULT_SETTINGS: CatalogSettings = { discoveryMode: "manual", collisionPolicy: "rename", lastScannedAt: null };
@@ -21,6 +31,13 @@ const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
 function now() { return new Date().toISOString(); }
 function normalizedPath(value: string) { return path.resolve(value); }
+function workspacePathIdentity(value: string, platform = process.platform) {
+  const resolved = normalizedPath(value);
+  return platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function sameSourceDirectory(left: string, right: string, { platform }: Pick<CatalogDependencies, "platform">) {
+  return workspacePathIdentity(left, platform) === workspacePathIdentity(right, platform);
+}
 function keyFor(value: string) { return createHash("sha256").update(value.toLocaleLowerCase()).digest("hex").slice(0, 32); }
 function globalDirectory() { return path.join(process.env.CODEX_HOME || path.join(homedir(), ".codex"), "agents"); }
 function workspaceDirectory(workspacePath: string) { return path.join(workspacePath, ".codex", "agents"); }
@@ -67,22 +84,59 @@ function safeFile(pathname: string) {
   try { return lstatSync(pathname).isFile() && !lstatSync(pathname).isSymbolicLink(); } catch { return false; }
 }
 
-function catalogAgent(sourcePath: string, parsed: ReturnType<typeof parseToml>, scope: "global" | "workspace", enabled: boolean, tags: string[], lanternwatch: boolean): CatalogAgent {
+function safeDirectory(pathname: string) {
+  try { return lstatSync(pathname).isDirectory() && !lstatSync(pathname).isSymbolicLink(); } catch { return false; }
+}
+
+function copyDestinations(name: string, dependencies: CatalogDependencies) {
+  const destinations = [
+    { scope: "global" as const, path: normalizedPath(path.join(globalDirectory(), `${name}.toml`)) },
+    ...workspaceRoots(dependencies).map((workspacePath) => ({ scope: "workspace" as const, workspacePath, path: normalizedPath(path.join(workspaceDirectory(workspacePath), `${name}.toml`)) })),
+  ];
+  return destinations.filter((destination) => !existsSync(destination.path));
+}
+
+function catalogAgent(sourcePath: string, parsed: ReturnType<typeof parseToml>, scope: "global" | "workspace", enabled: boolean, tags: string[], lanternwatch: boolean, readOnly = false, origin: CatalogOrigin = scope): CatalogAgent {
   return {
     id: keyFor(sourcePath),
     sourcePath,
     name: parsed.name,
     description: parsed.description,
-    scope: lanternwatch ? "lanternwatch" : scope,
+    // The directory that supplied a definition is its source classification.
+    // LanternWatch instructions are a capability/presentation marker, not a
+    // different Codex installation scope.
+    scope,
     enabled,
     tags: lanternwatch ? sanitizeTags(["LanternWatch", scope, ...tags]) : tags,
     collision: false,
-    readOnly: lanternwatch,
+    readOnly,
     codexReady: true,
+    origin,
+    copyDestinations: [],
   };
 }
 
-function discoverDirectory(database: DatabaseSync, directory: string, scope: "global" | "workspace", storageRoot: string): CatalogAgent[] {
+/**
+ * Older snapshots classified marker-matching definitions as LanternWatch even
+ * when their TOMLs were physically discovered from Global or a workspace.
+ * Recover those cached records at read time so a dashboard update does not
+ * require a user to rescan before its source sections become accurate.
+ */
+function physicalClassification(sourcePath: string, dependencies: CatalogDependencies) {
+  const directory = path.dirname(normalizedPath(sourcePath));
+  if (directory === normalizedPath(globalDirectory())) {
+    return { scope: "global" as const, origin: "global" as const };
+  }
+  const workspacePath = workspaceRoots(dependencies).find((root) => sameWorkspacePath(directory, workspaceDirectory(root), dependencies));
+  if (!workspacePath) return undefined;
+  return {
+    scope: "workspace" as const,
+    origin: workspaceOrigin(workspacePath, dependencies),
+    workspacePath,
+  };
+}
+
+function discoverDirectory(database: DatabaseSync, directory: string, scope: "global" | "workspace", storageRoot: string, origin: CatalogOrigin = scope): CatalogAgent[] {
   const agents: CatalogAgent[] = [];
   if (existsSync(directory)) {
     for (const entry of readdirSync(directory).filter((name) => name.endsWith(".toml")).sort()) {
@@ -92,7 +146,8 @@ function discoverDirectory(database: DatabaseSync, directory: string, scope: "gl
         const source = readFileSync(sourcePath, "utf8");
         const parsed = parseToml(source, sourcePath);
         const metadata = readMetadata(database, sourcePath);
-        agents.push(catalogAgent(sourcePath, parsed, scope, true, metadata.tags, LANTERNWATCH_MARKER.test(source)));
+        const lanternwatch = LANTERNWATCH_MARKER.test(source);
+        agents.push(catalogAgent(sourcePath, parsed, scope, true, metadata.tags, lanternwatch, false, origin));
       } catch { /* One malformed local file must not break the catalog. */ }
     }
   }
@@ -108,14 +163,14 @@ function discoverDirectory(database: DatabaseSync, directory: string, scope: "gl
         const parsed = parseToml(source, disabledPath);
         let tags: string[] = [];
         try { tags = sanitizeTags(JSON.parse(metadataRow.tags_json)); } catch {}
-        agents.push(catalogAgent(normalizedPath(metadataRow.source_path), parsed, scope, false, tags, LANTERNWATCH_MARKER.test(source)));
+        agents.push(catalogAgent(normalizedPath(metadataRow.source_path), parsed, scope, false, tags, LANTERNWATCH_MARKER.test(source), true, origin));
       } catch {}
     }
   }
   return agents;
 }
 
-function discoverExternal(database: DatabaseSync): CatalogAgent[] {
+function discoverExternal(database: DatabaseSync, dependencies: CatalogDependencies): CatalogAgent[] {
   const rows = database.prepare("SELECT source_path FROM agent_catalog_external ORDER BY source_path").all() as Array<{ source_path: string }>;
   const agents: CatalogAgent[] = [];
   for (const row of rows) {
@@ -125,7 +180,7 @@ function discoverExternal(database: DatabaseSync): CatalogAgent[] {
       const source = readFileSync(sourcePath, "utf8");
       const parsed = parseToml(source, sourcePath);
       const metadata = readMetadata(database, sourcePath);
-      agents.push({ id: keyFor(sourcePath), sourcePath, name: parsed.name, description: parsed.description, scope: "external", enabled: true, tags: metadata.tags, collision: false, readOnly: true, codexReady: false });
+      agents.push({ id: keyFor(sourcePath), sourcePath, name: parsed.name, description: parsed.description, scope: "external", enabled: true, tags: metadata.tags, collision: false, readOnly: true, codexReady: false, origin: "external", copyDestinations: copyDestinations(parsed.name, dependencies) });
     } catch { /* A registered source may be removed or invalidated outside LanternWatch. */ }
   }
   return agents;
@@ -138,14 +193,25 @@ function markCollisions(agents: CatalogAgent[]) {
   return agents;
 }
 
-function validSnapshot(value: unknown): CatalogAgent[] {
+function validSnapshot(value: unknown, dependencies: CatalogDependencies): CatalogAgent[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object") return [];
     const agent = candidate as Partial<CatalogAgent>;
     if (typeof agent.id !== "string" || typeof agent.name !== "string" || typeof agent.description !== "string" || typeof agent.sourcePath !== "string") return [];
     if (!["global", "workspace", "external", "lanternwatch"].includes(String(agent.scope))) return [];
-    return [{ id: agent.id, name: agent.name, description: agent.description, sourcePath: agent.sourcePath, scope: agent.scope as CatalogAgent["scope"], enabled: Boolean(agent.enabled), tags: sanitizeTags(agent.tags), collision: Boolean(agent.collision), readOnly: Boolean(agent.readOnly), codexReady: Boolean(agent.codexReady) }];
+    const origin = ["global", "lanternwatch", "workspace", "registered-workspace", "imported-workspace", "external"].includes(String(agent.origin))
+      ? agent.origin as CatalogOrigin
+      : agent.scope === "lanternwatch" ? "lanternwatch" : agent.scope;
+    const legacyLanternWatchClassification = agent.scope === "lanternwatch" || origin === "lanternwatch";
+    const physical = legacyLanternWatchClassification ? physicalClassification(agent.sourcePath, dependencies) : undefined;
+    const destinations: NonNullable<CatalogAgent["copyDestinations"]> = Array.isArray(agent.copyDestinations) ? agent.copyDestinations.flatMap((destination) => {
+      if (!destination || typeof destination !== "object") return [];
+      const value = destination as { scope?: unknown; path?: unknown; workspacePath?: unknown };
+      if ((value.scope !== "global" && value.scope !== "workspace") || typeof value.path !== "string") return [];
+      return [{ scope: value.scope as "global" | "workspace", path: value.path, ...(typeof value.workspacePath === "string" ? { workspacePath: value.workspacePath } : {}) }];
+    }) : [];
+    return [{ id: agent.id, name: agent.name, description: agent.description, sourcePath: agent.sourcePath, scope: physical?.scope ?? agent.scope as CatalogAgent["scope"], enabled: Boolean(agent.enabled), tags: sanitizeTags(agent.tags), collision: Boolean(agent.collision), readOnly: Boolean(agent.readOnly), codexReady: Boolean(agent.codexReady), origin: physical?.origin ?? origin, ...(physical?.workspacePath ? { workspacePath: physical.workspacePath } : typeof agent.workspacePath === "string" ? { workspacePath: agent.workspacePath } : {}), copyDestinations: destinations }];
   });
 }
 
@@ -171,7 +237,124 @@ export function ensureCatalogSchema(database: DatabaseSync) {
       source_path TEXT PRIMARY KEY,
       registered_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS agent_catalog_workspace (
+      workspace_path TEXT PRIMARY KEY,
+      registered_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS agent_catalog_workspace_snapshot (
+      workspace_path TEXT PRIMARY KEY,
+      agents_json TEXT NOT NULL,
+      imported_at TEXT NOT NULL
+    );
   `);
+}
+
+function registeredWorkspaceRoots(database: DatabaseSync) {
+  return (database.prepare("SELECT workspace_path FROM agent_catalog_workspace ORDER BY workspace_path").all() as Array<{ workspace_path: string }>)
+    .map((row) => normalizedPath(row.workspace_path));
+}
+
+function registeredWorkspacePaths(database: DatabaseSync) {
+  return (database.prepare("SELECT workspace_path FROM agent_catalog_workspace ORDER BY workspace_path").all() as Array<{ workspace_path: string }>)
+    .map((row) => normalizedPath(row.workspace_path));
+}
+
+function sameWorkspacePath(left: string, right: string, { platform }: CatalogDependencies) {
+  return workspacePathIdentity(left, platform) === workspacePathIdentity(right, platform);
+}
+
+function isRegisteredWorkspaceRoot(workspacePath: string, dependencies: CatalogDependencies) {
+  return registeredWorkspaceRoots(dependencies.database)
+    .some((registeredWorkspacePath) => sameWorkspacePath(registeredWorkspacePath, workspacePath, dependencies));
+}
+
+function isAllowedWorkspaceRoot(workspacePath: string, dependencies: CatalogDependencies) {
+  return dependencies.allowedWorkspacePaths
+    .map(normalizedPath)
+    .some((allowedWorkspacePath) => sameWorkspacePath(allowedWorkspacePath, workspacePath, dependencies));
+}
+
+function workspaceOrigin(workspacePath: string, dependencies: CatalogDependencies): Extract<CatalogOrigin, "workspace" | "registered-workspace"> {
+  return isAllowedWorkspaceRoot(workspacePath, dependencies) || !isRegisteredWorkspaceRoot(workspacePath, dependencies)
+    ? "workspace"
+    : "registered-workspace";
+}
+
+function workspaceSnapshotMetadata(database: DatabaseSync): CatalogWorkspaceSnapshot[] {
+  return (database.prepare("SELECT workspace_path, agents_json, imported_at FROM agent_catalog_workspace_snapshot ORDER BY workspace_path").all() as Array<{ workspace_path: string; agents_json: string; imported_at: string }>)
+    .map((row) => {
+      let agentCount = 0;
+      try {
+        const parsed = JSON.parse(row.agents_json);
+        agentCount = Array.isArray(parsed) ? parsed.length : 0;
+      } catch { /* Corrupt managed data remains removable and reports no valid count. */ }
+      return { workspacePath: normalizedPath(row.workspace_path), agentCount, importedAt: row.imported_at };
+    });
+}
+
+function catalogResponse(database: DatabaseSync, agents: CatalogAgent[], catalogSettings: CatalogSettings): CatalogResponse {
+  const workspacePaths = registeredWorkspacePaths(database);
+  const snapshots = workspaceSnapshotMetadata(database);
+  return {
+    agents,
+    settings: catalogSettings,
+    workspacePaths,
+    workspaceSnapshots: snapshots.map((snapshot) => snapshot.workspacePath),
+    workspaceSnapshotMetadata: snapshots,
+  };
+}
+
+function workspaceRoots({ database, allowedWorkspacePaths, platform }: CatalogDependencies) {
+  const seen = new Set<string>();
+  return [...allowedWorkspacePaths.map(normalizedPath), ...registeredWorkspaceRoots(database)]
+    .filter((workspacePath) => {
+      const identity = workspacePathIdentity(workspacePath, platform);
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    })
+    // A user home directory can be registered as a project. Its derived
+    // `.codex/agents` directory is then the same physical source already
+    // scanned as Global, so it must not be scanned a second time as workspace.
+    .filter((workspacePath) => !sameSourceDirectory(workspaceDirectory(workspacePath), globalDirectory(), { platform }));
+}
+
+function snapshotDefinitions(database: DatabaseSync) {
+  const rows = database.prepare("SELECT workspace_path, agents_json FROM agent_catalog_workspace_snapshot ORDER BY workspace_path").all() as Array<{ workspace_path: string; agents_json: string }>;
+  return rows.flatMap((row) => {
+    try {
+      const candidates = JSON.parse(row.agents_json) as unknown;
+      if (!Array.isArray(candidates)) return [];
+      return candidates.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== "object") return [];
+        const definition = candidate as Partial<SnapshotDefinition>;
+        if (typeof definition.sourcePath !== "string" || typeof definition.source !== "string" || typeof definition.name !== "string" || typeof definition.description !== "string") return [];
+        try {
+          const parsed = parseToml(definition.source, definition.sourcePath);
+          if (parsed.name !== definition.name || parsed.description !== definition.description) return [];
+          return [{ workspacePath: normalizedPath(row.workspace_path), ...definition as SnapshotDefinition }];
+        } catch { return []; }
+      });
+    } catch { return []; }
+  });
+}
+
+function discoverWorkspaceSnapshots(database: DatabaseSync, dependencies: CatalogDependencies): CatalogAgent[] {
+  return snapshotDefinitions(database).map((definition) => ({
+    id: keyFor(`workspace-snapshot\0${definition.workspacePath}\0${definition.sourcePath}`),
+    sourcePath: normalizedPath(definition.sourcePath),
+    name: definition.name,
+    description: definition.description,
+    scope: "external",
+    enabled: true,
+    tags: ["workspace-snapshot"],
+    collision: false,
+    readOnly: true,
+    codexReady: false,
+    origin: "imported-workspace",
+    workspacePath: definition.workspacePath,
+    copyDestinations: copyDestinations(definition.name, dependencies),
+  }));
 }
 
 function settings(database: DatabaseSync): CatalogSettings {
@@ -190,38 +373,43 @@ function writeSetting(database: DatabaseSync, key: string, value: string) {
   database.prepare("INSERT INTO agent_catalog_settings(setting_key, setting_value, updated_at) VALUES (?, ?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").run(key, value, now());
 }
 
-function scanCurrent({ database, storageRoot, allowedWorkspacePaths }: CatalogDependencies) {
-  const workspaceRoots = [...new Set(allowedWorkspacePaths.map(normalizedPath))];
+function scanCurrent(dependencies: CatalogDependencies) {
+  const { database, storageRoot } = dependencies;
+  const roots = workspaceRoots(dependencies);
   return markCollisions([
     ...discoverDirectory(database, globalDirectory(), "global", storageRoot),
-    ...workspaceRoots.flatMap((root) => discoverDirectory(database, workspaceDirectory(root), "workspace", storageRoot)),
-    ...discoverExternal(database),
+    ...roots.flatMap((root) => discoverDirectory(database, workspaceDirectory(root), "workspace", storageRoot, workspaceOrigin(root, dependencies)).map((agent) => ({ ...agent, workspacePath: root }))),
+    ...discoverExternal(database, dependencies),
+    ...discoverWorkspaceSnapshots(database, dependencies),
   ]).sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope) || a.sourcePath.localeCompare(b.sourcePath));
 }
 
-function scanAndStore({ database, storageRoot, allowedWorkspacePaths }: CatalogDependencies) {
-  const workspaceRoots = [...new Set(allowedWorkspacePaths.map(normalizedPath))];
-  const agents = scanCurrent({ database, storageRoot, allowedWorkspacePaths });
+function scanAndStore(dependencies: CatalogDependencies): CatalogResponse {
+  const { database, storageRoot } = dependencies;
+  const roots = workspaceRoots(dependencies);
+  const agents = scanCurrent(dependencies);
   const scannedAt = now();
-  database.prepare("INSERT INTO agent_catalog_snapshot(cache_key, agents_json, scanned_at) VALUES (?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET agents_json = excluded.agents_json, scanned_at = excluded.scanned_at").run(snapshotKey(storageRoot, workspaceRoots), JSON.stringify(agents), scannedAt);
+  database.prepare("INSERT INTO agent_catalog_snapshot(cache_key, agents_json, scanned_at) VALUES (?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET agents_json = excluded.agents_json, scanned_at = excluded.scanned_at").run(snapshotKey(storageRoot, roots), JSON.stringify(agents), scannedAt);
   writeSetting(database, "lastScannedAt", scannedAt);
-  return { agents, settings: { ...settings(database), lastScannedAt: scannedAt } };
+  return catalogResponse(database, agents, { ...settings(database), lastScannedAt: scannedAt });
 }
 
-export function getCatalog({ database, storageRoot, allowedWorkspacePaths }: CatalogDependencies): { agents: CatalogAgent[]; settings: CatalogSettings } {
+export function getCatalog(dependencies: CatalogDependencies): CatalogResponse {
+  const { database, storageRoot } = dependencies;
   ensureCatalogSchema(database);
-  const workspaceRoots = [...new Set(allowedWorkspacePaths.map(normalizedPath))];
-  const snapshot = database.prepare("SELECT agents_json FROM agent_catalog_snapshot WHERE cache_key = ?").get(snapshotKey(storageRoot, workspaceRoots)) as { agents_json: string } | undefined;
+  const roots = workspaceRoots(dependencies);
+  const snapshot = database.prepare("SELECT agents_json FROM agent_catalog_snapshot WHERE cache_key = ?").get(snapshotKey(storageRoot, roots)) as { agents_json: string } | undefined;
   let agents: CatalogAgent[] = [];
-  try { agents = validSnapshot(snapshot ? JSON.parse(snapshot.agents_json) : []); } catch {}
-  return { agents, settings: settings(database) };
+  try { agents = validSnapshot(snapshot ? JSON.parse(snapshot.agents_json) : [], dependencies); } catch {}
+  return catalogResponse(database, agents, settings(database));
 }
 
-function assertWorkspace(allowed: string[], workspacePath: string | undefined) {
+function assertWorkspace(dependencies: CatalogDependencies, workspacePath: string | undefined) {
   if (!workspacePath) throw new Error("Choose a workspace destination.");
   const target = normalizedPath(workspacePath);
-  if (!allowed.map(normalizedPath).includes(target)) throw new Error("That workspace is not available in LanternWatch.");
-  return target;
+  const root = workspaceRoots(dependencies).find((candidate) => sameWorkspacePath(candidate, target, dependencies));
+  if (!root) throw new Error("That workspace is not available in LanternWatch.");
+  return root;
 }
 
 function assertName(value: string) {
@@ -243,20 +431,23 @@ function backupAgent(source: string, storageRoot: string, originalPath: string) 
   copyFileSync(source, path.join(directory, `${keyFor(originalPath)}-${Date.now()}.toml`));
 }
 
-function sourceScope(sourcePath: string, allowedWorkspacePaths: string[]) {
+function sourceScope(sourcePath: string, dependencies: CatalogDependencies) {
   if (path.dirname(sourcePath) === normalizedPath(globalDirectory())) return "global" as const;
-  if (allowedWorkspacePaths.some((workspace) => path.dirname(sourcePath) === normalizedPath(workspaceDirectory(workspace)))) return "workspace" as const;
+  if (workspaceRoots(dependencies).some((workspace) => sameWorkspacePath(path.dirname(sourcePath), workspaceDirectory(workspace), dependencies))) return "workspace" as const;
   throw new Error("That agent is not in a managed Codex directory.");
 }
 
-function isManagedSource(sourcePath: string, allowedWorkspacePaths: string[]) {
+function isManagedSource(sourcePath: string, dependencies: CatalogDependencies) {
   return path.dirname(sourcePath) === normalizedPath(globalDirectory())
-    || allowedWorkspacePaths.some((workspace) => path.dirname(sourcePath) === normalizedPath(workspaceDirectory(workspace)));
+    || workspaceRoots(dependencies).some((workspace) => sameWorkspacePath(path.dirname(sourcePath), workspaceDirectory(workspace), dependencies));
 }
 
-function assertManagedUserAgent(sourcePath: string, allowedWorkspacePaths: string[]) {
-  sourceScope(sourcePath, allowedWorkspacePaths);
-  if (safeFile(sourcePath) && LANTERNWATCH_MARKER.test(readFileSync(sourcePath, "utf8"))) throw new Error("LanternWatch definitions are read-only in this catalog.");
+function assertMutableManagedAgent(dependencies: CatalogDependencies, sourcePath: string, allowMissingSource = false) {
+  const scope = sourceScope(sourcePath, dependencies);
+  if (!safeFile(sourcePath) && !allowMissingSource) {
+    throw new Error("The agent file is unavailable.");
+  }
+  return scope;
 }
 
 function assertRegisteredExternal(database: DatabaseSync, sourcePath: string) {
@@ -272,13 +463,36 @@ function assertCollisionTarget(dependencies: CatalogDependencies, sourcePath: st
   const agents = scanCurrent(dependencies);
   const target = agents.find((agent) => agent.sourcePath === sourcePath);
   if (!target) throw new Error("Refresh agents and choose an unresolved workspace definition.");
-  if (target.readOnly || target.scope === "lanternwatch") throw new Error("LanternWatch definitions are read-only in this catalog.");
-  if (target.scope !== "workspace") throw new Error("Resolve duplicate sources from a user-owned workspace definition.");
+  if (target.readOnly) throw new Error("That agent is read-only in this catalog.");
   if (!target.enabled || !target.codexReady || !target.collision) throw new Error("That agent does not have an unresolved same-name Codex collision.");
   const candidates = agents.filter((agent) => agent.enabled && agent.codexReady && agent.name.toLowerCase() === target.name.toLowerCase());
   if (candidates.length !== 2) throw new Error("Resolve exactly two same-name Codex definitions at a time.");
-  assertManagedUserAgent(sourcePath, dependencies.allowedWorkspacePaths);
+  assertMutableManagedAgent(dependencies, sourcePath);
   return { target, agents };
+}
+
+function snapshotSource(database: DatabaseSync, sourcePath: string) {
+  const target = normalizedPath(sourcePath);
+  const definition = snapshotDefinitions(database).find((candidate) => normalizedPath(candidate.sourcePath) === target);
+  if (!definition) return undefined;
+  return { source: definition.source, parsed: parseToml(definition.source, definition.sourcePath) };
+}
+
+function readWorkspaceSnapshot(workspacePath: string): SnapshotDefinition[] {
+  const root = normalizedPath(workspacePath);
+  const directory = workspaceDirectory(root);
+  if (!safeDirectory(root)) throw new Error("Choose a readable workspace folder.");
+  if (!existsSync(directory)) return [];
+  if (!safeDirectory(directory)) throw new Error("The workspace agent folder is not a readable directory.");
+  return readdirSync(directory).filter((entry) => entry.endsWith(".toml")).sort().flatMap((entry) => {
+    const sourcePath = normalizedPath(path.join(directory, entry));
+    if (!safeFile(sourcePath)) return [];
+    try {
+      const source = readFileSync(sourcePath, "utf8");
+      const parsed = parseToml(source, sourcePath);
+      return [{ sourcePath, source, name: parsed.name, description: parsed.description }];
+    } catch { return []; }
+  });
 }
 
 function withCatalogTransaction<T>(database: DatabaseSync, work: () => T) {
@@ -382,12 +596,46 @@ export function applyCatalogAction(dependencies: CatalogDependencies, action: Ca
     writeSetting(database, "collisionPolicy", next.collisionPolicy);
     return next.discoveryMode === "automatic-once" ? scanAndStore(dependencies) : getCatalog(dependencies);
   }
+  if (action.action === "register-workspace") {
+    const workspacePath = normalizedPath(action.workspacePath);
+    if (!safeDirectory(workspacePath)) throw new Error("Choose a readable workspace folder.");
+    return withCatalogTransaction(database, () => {
+      database.prepare("INSERT INTO agent_catalog_workspace(workspace_path, registered_at) VALUES (?, ?) ON CONFLICT(workspace_path) DO UPDATE SET registered_at = excluded.registered_at").run(workspacePath, now());
+      return scanAndStore(dependencies);
+    });
+  }
+  if (action.action === "unregister-workspace") {
+    const workspacePath = normalizedPath(action.workspacePath);
+    return withCatalogTransaction(database, () => {
+      database.prepare("DELETE FROM agent_catalog_workspace WHERE workspace_path = ?").run(workspacePath);
+      return scanAndStore(dependencies);
+    });
+  }
+  if (action.action === "import-workspace-snapshot") {
+    const workspacePath = normalizedPath(action.workspacePath);
+    // Read and validate before the transaction: a failed folder read must leave
+    // the previously saved browser snapshot exactly as it was.
+    const definitions = readWorkspaceSnapshot(workspacePath);
+    return withCatalogTransaction(database, () => {
+      database.prepare("INSERT INTO agent_catalog_workspace_snapshot(workspace_path, agents_json, imported_at) VALUES (?, ?, ?) ON CONFLICT(workspace_path) DO UPDATE SET agents_json = excluded.agents_json, imported_at = excluded.imported_at").run(workspacePath, JSON.stringify(definitions), now());
+      return scanAndStore(dependencies);
+    });
+  }
+  if (action.action === "remove-workspace-snapshot") {
+    const workspacePath = normalizedPath(action.workspacePath);
+    return withCatalogTransaction(database, () => {
+      // Snapshot removal is catalog-only. It deliberately never touches the
+      // imported workspace or any TOML it contained.
+      database.prepare("DELETE FROM agent_catalog_workspace_snapshot WHERE workspace_path = ?").run(workspacePath);
+      return scanAndStore(dependencies);
+    });
+  }
   if (action.action === "create") {
     const name = assertName(action.name);
     const description = action.description.trim().slice(0, 500);
     const developerInstructions = action.developerInstructions.trim();
     if (!description || !developerInstructions) throw new Error("Description and developer instructions are required.");
-    const root = action.scope === "global" ? globalDirectory() : workspaceDirectory(assertWorkspace(allowedWorkspacePaths, action.workspacePath));
+    const root = action.scope === "global" ? globalDirectory() : workspaceDirectory(assertWorkspace(dependencies, action.workspacePath));
     const target = normalizedPath(path.join(root, `${name}.toml`));
     if (existsSync(target)) throw new Error("An agent file with that name already exists in this location.");
     atomicWrite(target, agentToml(name, description, developerInstructions));
@@ -397,7 +645,7 @@ export function applyCatalogAction(dependencies: CatalogDependencies, action: Ca
   const sourcePath = normalizedPath(action.sourcePath);
   if (action.action === "register") {
     if (!safeFile(sourcePath)) throw new Error("Choose a readable local TOML file.");
-    if (isManagedSource(sourcePath, allowedWorkspacePaths)) throw new Error("This TOML is already in a managed Codex folder.");
+    if (isManagedSource(sourcePath, dependencies)) throw new Error("This TOML is already in a managed Codex folder.");
     parseToml(readFileSync(sourcePath, "utf8"), sourcePath);
     database.prepare("INSERT INTO agent_catalog_external(source_path, registered_at) VALUES (?, ?) ON CONFLICT(source_path) DO UPDATE SET registered_at = excluded.registered_at").run(sourcePath, now());
     return scanAndStore(dependencies);
@@ -408,19 +656,29 @@ export function applyCatalogAction(dependencies: CatalogDependencies, action: Ca
     return scanAndStore(dependencies);
   }
   if (action.action === "import") {
-    const parsed = assertRegisteredExternal(database, sourcePath);
-    const root = action.scope === "global" ? globalDirectory() : workspaceDirectory(assertWorkspace(allowedWorkspacePaths, action.workspacePath));
-    const target = normalizedPath(path.join(root, `${parsed.name}.toml`));
+    const registered = (() => {
+      try { return assertRegisteredExternal(database, sourcePath); } catch (error) {
+        const snapshot = snapshotSource(database, sourcePath);
+        if (snapshot) return snapshot.parsed;
+        throw error;
+      }
+    })();
+    const source = safeFile(sourcePath) && database.prepare("SELECT source_path FROM agent_catalog_external WHERE source_path = ?").get(sourcePath)
+      ? readFileSync(sourcePath, "utf8")
+      : snapshotSource(database, sourcePath)?.source;
+    if (!source) throw new Error("The saved definition is unavailable for copying.");
+    const root = action.scope === "global" ? globalDirectory() : workspaceDirectory(assertWorkspace(dependencies, action.workspacePath));
+    const target = normalizedPath(path.join(root, `${registered.name}.toml`));
     if (existsSync(target)) throw new Error("An agent file with that name already exists in this location.");
     const metadata = readMetadata(database, sourcePath);
-    atomicWrite(target, readFileSync(sourcePath, "utf8"));
+    atomicWrite(target, source);
     writeMetadata(database, target, metadata.tags, null);
     database.prepare("DELETE FROM agent_catalog_external WHERE source_path = ?").run(sourcePath);
     database.prepare("DELETE FROM agent_catalog_metadata WHERE source_path = ?").run(sourcePath);
     return scanAndStore(dependencies);
   }
   if (action.action === "resolve-collision") return resolveCollision(dependencies, action);
-  assertManagedUserAgent(sourcePath, allowedWorkspacePaths);
+  assertMutableManagedAgent(dependencies, sourcePath, action.action === "toggle" && action.enabled);
   const metadata = readMetadata(database, sourcePath);
   if (action.action === "tags") {
     writeMetadata(database, sourcePath, sanitizeTags(action.tags), metadata.disabledPath);

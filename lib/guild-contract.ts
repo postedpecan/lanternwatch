@@ -26,6 +26,8 @@ export type StoredGuildEvent = {
   projectId: string;
   runId: string;
   agent: string;
+  /** Raw host-selected custom-agent identity, retained for exact catalog attribution. */
+  agentType: string;
   status: RoomStatus;
   message: string;
   quest: string | null;
@@ -40,6 +42,8 @@ export type GuildAgentActivity = {
   id: string;
   agentInstanceId: string;
   agent: string;
+  /** Raw host-selected custom-agent identity, retained for exact catalog attribution. */
+  agentType: string;
   projectId: string;
   projectName: string;
   runId: string;
@@ -62,6 +66,36 @@ export type CatalogAgent = {
   collision: boolean;
   readOnly: boolean;
   codexReady: boolean;
+  /**
+   * Where LanternWatch obtained this definition. `scope` remains the Codex
+   * execution scope; origin is deliberately more precise for catalog grouping.
+   */
+  origin?: "global" | "lanternwatch" | "workspace" | "registered-workspace" | "imported-workspace" | "external";
+  workspacePath?: string;
+  /** Destinations that are currently free and safe for an explicit copy. */
+  copyDestinations?: CatalogCopyDestination[];
+};
+
+export type CatalogCopyDestination = {
+  scope: "global" | "workspace";
+  path: string;
+  workspacePath?: string;
+};
+
+export type CatalogWorkspaceSnapshot = {
+  workspacePath: string;
+  agentCount: number;
+  importedAt: string;
+};
+
+export type CatalogResponse = {
+  agents: CatalogAgent[];
+  settings: CatalogSettings;
+  /** Explicitly registered workspace roots, including roots with no TOMLs. */
+  workspacePaths: string[];
+  /** Imported workspace roots, including intentionally empty snapshots. */
+  workspaceSnapshots: string[];
+  workspaceSnapshotMetadata: CatalogWorkspaceSnapshot[];
 };
 
 export type CatalogSettings = {
@@ -77,6 +111,10 @@ export type CatalogAction =
   | { action: "register"; sourcePath: string }
   | { action: "unregister"; sourcePath: string }
   | { action: "import"; sourcePath: string; scope: "global" | "workspace"; workspacePath?: string }
+  | { action: "register-workspace"; workspacePath: string }
+  | { action: "unregister-workspace"; workspacePath: string }
+  | { action: "import-workspace-snapshot"; workspacePath: string }
+  | { action: "remove-workspace-snapshot"; workspacePath: string }
   | { action: "tags"; sourcePath: string; tags: string[] }
   | { action: "toggle"; sourcePath: string; enabled: boolean }
   | { action: "rename"; sourcePath: string; name: string }
@@ -157,6 +195,8 @@ export type IncomingGuildEvent = {
   projectName?: string;
   runId?: string;
   agent?: string;
+  /** Raw host-selected custom-agent identity; `agent` remains the canonical role. */
+  agentType?: string;
   status?: string;
   message?: string;
   quest?: string;
