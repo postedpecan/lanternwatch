@@ -18,6 +18,36 @@ export type GuildRun = {
   completedAt: string | null;
   updatedAt: string;
   durationSeconds: number;
+  /** Absent only for older callers; null totals mean the host did not report usage. */
+  tokenUsage?: TokenUsageSummary;
+};
+
+/**
+ * Token counters reported by a host. LanternWatch never derives a total from
+ * component counters because providers do not agree on whether cached or
+ * reasoning tokens overlap with input/output totals.
+ */
+export type TokenUsageReceipt = {
+  source: string;
+  model?: string;
+  mode?: "cumulative" | "delta";
+  reportedAt?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  /** Use only when the reporting source guarantees this value is non-overlapping. */
+  totalTokens?: number;
+};
+
+export type TokenUsageSummary = {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+  reportedAgentInstances: number;
+  unreportedAgentInstances: number;
 };
 
 export type StoredGuildEvent = {
@@ -127,6 +157,7 @@ export type AgentMetric = {
   activeInstances: number;
   lastActivityAt: string | null;
   lastActivityMessage: string | null;
+  tokenUsage?: TokenUsageSummary;
 };
 
 export type AgentPresentation = {
@@ -148,6 +179,30 @@ export type GuildStatistics = {
   totalRuntimeSeconds: number;
   mostUsedAgent: string | null;
   mostUsedAgentRuns: number;
+  tokenUsage?: TokenUsageSummary;
+};
+
+export type HistoryRunSummary = GuildRun & {
+  projectName: string;
+  eventCount: number;
+  participants: string[];
+};
+
+export type HistoryQuery = {
+  projectId?: string;
+  q?: string;
+  status?: "active" | "completed" | "interrupted" | "stalled";
+  agent?: string;
+  from?: string;
+  to?: string;
+  limit: number;
+  cursor?: { updatedAt: string; id: string };
+};
+
+export type HistoryPayload = {
+  items: HistoryRunSummary[];
+  totalMatches: number;
+  nextCursor: { updatedAt: string; id: string } | null;
 };
 
 export type DashboardPayload = {
@@ -205,5 +260,7 @@ export type IncomingGuildEvent = {
   runComplete?: boolean;
   heartbeat?: boolean;
   agentInstanceId?: string;
+  /** Optional real host receipt; lifecycle hooks do not synthesize token values. */
+  usage?: TokenUsageReceipt;
   source?: HookSource;
 };

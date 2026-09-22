@@ -17,7 +17,7 @@ test("Agents UI routes product copy through the source-owned copy module", async
 
   // These labels are deliberately checked here so new UI labels are added to
   // agent-copy.ts instead of being embedded in a rendering component.
-  for (const label of ["Recorded agent workload", "Run-status context", "Live occupancy", "Agent roster", "Workspace sources"]) {
+  for (const label of ["Recorded agent workload", "Run-status context", "Live occupancy", "Agent roster", "Workspace sources", "Tokens"]) {
     assert.ok(!sources.some((source) => source.includes(`>${label}<`) || source.includes(`\"${label}\"`)), label);
   }
 

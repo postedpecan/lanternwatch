@@ -302,6 +302,10 @@ demo helpers. They update client state but do not persist events.
 | `npm run research:retry` | Retry pending or failed research-note exports |
 | `npm run build:sprites` | Rebuild optional sprite assets |
 
+## Support
+
+For bugs, problems, or function requests, contact [attakorn.p@proton.me](mailto:attakorn.p@proton.me).
+
 ## Security model
 
 Lanternwatch is a trusted local tool, not a hosted multi-user service. The

@@ -42,6 +42,10 @@ export const AGENT_COPY = {
     working: "Working",
     project: "Project",
     elapsed: "Elapsed",
+    tokens: "Tokens",
+    tokenNotReported: "Not reported",
+    tokenPartialCoverage: (reported: number, total: number) => `Partial: ${reported} of ${total} reported`,
+    tokenCoverage: (reported: number) => `${reported} reported`,
   },
   catalog: {
     title: "Agent roster",

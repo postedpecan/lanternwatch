@@ -10,6 +10,16 @@ type AgentGroup = { key: string; name: string; definitions: CatalogAgent[]; metr
 type CollisionResolution = "tag" | "rename" | "disable";
 type ExtendedCatalogAgent = CatalogAgent & { copyDestination?: string; sourceGroup?: string; importedWorkspacePath?: string };
 
+function formatTokens(value: number | null | undefined) {
+  return value === null || value === undefined ? AGENT_COPY.dashboard.tokenNotReported : new Intl.NumberFormat().format(value);
+}
+
+function tokenCoverage(usage: AgentMetric["tokenUsage"] | GuildStatistics["tokenUsage"]) {
+  if (!usage || usage.reportedAgentInstances === 0) return AGENT_COPY.dashboard.tokenNotReported;
+  const total = usage.reportedAgentInstances + usage.unreportedAgentInstances;
+  return usage.unreportedAgentInstances > 0 ? AGENT_COPY.dashboard.tokenPartialCoverage(usage.reportedAgentInstances, total) : AGENT_COPY.dashboard.tokenCoverage(usage.reportedAgentInstances);
+}
+
 function isEditableProjectDefinition(agent: CatalogAgent) {
   return !isProtectedRosterDefinition(agent);
 }
@@ -223,6 +233,7 @@ function AgentDashboard({ groups, activities, statistics, scopeLabel, hasProject
       <article><span>{AGENT_COPY.dashboard.currentOccupancy}</span><strong>{active} {AGENT_COPY.dashboard.active.toLowerCase()}</strong><small>{disabled} {AGENT_COPY.dashboard.disabled}{AGENT_COPY.catalog.detailSeparator}{lanternwatch} {AGENT_COPY.dashboard.lanternwatch}</small></article>
       <article><span>{AGENT_COPY.dashboard.trackedWork}</span><strong>{AGENT_COPY.dashboard.runs(totalRuns)}</strong><small>{formatElapsed(trackedTime)} {AGENT_COPY.dashboard.lifecycleTime}</small></article>
       <article><span>{AGENT_COPY.dashboard.unresolvedSources}</span><strong>{unresolved}</strong><small>{AGENT_COPY.dashboard.sameName}</small></article>
+      <article className="agent-token-stat"><span>{AGENT_COPY.dashboard.tokens}</span><strong>{formatTokens(statistics.tokenUsage?.totalTokens)}</strong><small>{tokenCoverage(statistics.tokenUsage)}</small></article>
     </div>
     <div className="agent-operations-grid">
       <article className="agent-chart-card"><div className="agent-chart-head"><div><h3>{AGENT_COPY.dashboard.workload}</h3><p>{AGENT_COPY.dashboard.workloadDescription}</p></div><span>{scopeLabel}</span></div>
@@ -286,7 +297,7 @@ function AgentRosterCard({ definition, group, busy, onManage, onImport, onResolv
   const workspaceDefinition = agent.workspacePath ?? AGENT_COPY.catalog.noWorkspaceDefinition;
   return <article className={`agent-roster-card${unresolved ? " collision" : ""}`} role="listitem">
     <div className="agent-roster-title"><div><h4 title={agent.name}>{agent.name}</h4><span className={`agent-status ${status.toLowerCase().replaceAll(" ", "-")}`}>{status}</span></div></div>
-    <div className="agent-facts"><span>{AGENT_COPY.catalog.trackedTime} <b>{formatElapsed(metric.trackedActiveSeconds)}</b></span><span>{AGENT_COPY.catalog.activeNow} <b>{metric.activeInstances}</b></span><span>{AGENT_COPY.catalog.lastActivity} <b title={metric.lastActivityAt ?? undefined}>{metric.lastActivityAt ? formatAge(Math.max(0, Math.floor((Date.now() - Date.parse(metric.lastActivityAt)) / 1000))) : AGENT_COPY.catalog.none}</b></span><span>{AGENT_COPY.catalog.runCount} <b>{AGENT_COPY.dashboard.runs(metric.runCount)}</b></span></div>
+    <div className="agent-facts"><span>{AGENT_COPY.catalog.trackedTime} <b>{formatElapsed(metric.trackedActiveSeconds)}</b></span><span>{AGENT_COPY.catalog.activeNow} <b>{metric.activeInstances}</b></span><span>{AGENT_COPY.catalog.lastActivity} <b title={metric.lastActivityAt ?? undefined}>{metric.lastActivityAt ? formatAge(Math.max(0, Math.floor((Date.now() - Date.parse(metric.lastActivityAt)) / 1000))) : AGENT_COPY.catalog.none}</b></span><span>{AGENT_COPY.catalog.runCount} <b>{AGENT_COPY.dashboard.runs(metric.runCount)}</b></span><span className="agent-token-fact">{AGENT_COPY.dashboard.tokens} <b>{formatTokens(metric.tokenUsage?.totalTokens)}</b><small>{tokenCoverage(metric.tokenUsage)}</small></span></div>
     {metric.lastActivityMessage && <p className="agent-last-activity">{metric.lastActivityMessage}</p>}
     {unresolved && <div className="collision-copy"><p><strong>{AGENT_COPY.collision.title}</strong> {hasMutableDefinition ? AGENT_COPY.collision.editable : AGENT_COPY.collision.protected}</p><button type="button" onClick={() => onResolve(group)} disabled={busy}>{hasMutableDefinition ? AGENT_COPY.collision.resolve : AGENT_COPY.collision.guidance}</button></div>}
     <div className="agent-card-details">

@@ -19,6 +19,14 @@ function clean(value, fallback, max = 1000) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : fallback;
 }
 
+function normalizeDate(value) {
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 export function parseNotifyPayload(raw) {
   try {
     const payload = JSON.parse(raw);
@@ -109,6 +117,23 @@ function ensureSchema(database) {
     CREATE INDEX IF NOT EXISTS events_run_id ON events(run_id, id);
     CREATE INDEX IF NOT EXISTS events_project_agent_run ON events(project_id, agent, run_id);
     CREATE INDEX IF NOT EXISTS runs_project_updated ON runs(project_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      agent_instance_id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      source TEXT NOT NULL,
+      model TEXT NOT NULL DEFAULT '',
+      usage_mode TEXT NOT NULL CHECK(usage_mode IN ('cumulative', 'delta')),
+      input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+      cached_input_tokens INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+      output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+      reasoning_tokens INTEGER CHECK(reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+      total_tokens INTEGER CHECK(total_tokens IS NULL OR total_tokens >= 0),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, run_id, agent_instance_id, source, model)
+    );
+    CREATE INDEX IF NOT EXISTS agent_usage_run_agent ON agent_usage(project_id, run_id, agent);
   `);
   const columns = database.prepare("PRAGMA table_info(runs)").all();
   if (!columns.some((column) => column.name === "outcome")) {
@@ -144,6 +169,70 @@ function scopedStorageId(kind, projectId, sourceId) {
 function resolveRunStorageId(database, projectId, sourceRunId) {
   return database.prepare("SELECT id FROM runs WHERE project_id = ? AND source_run_id = ?").get(projectId, sourceRunId)?.id
     || scopedStorageId("run", projectId, sourceRunId);
+}
+
+function tokenCount(value, label) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`);
+  return value;
+}
+
+function normalizeUsage(value, occurredAt) {
+  if (!value) return null;
+  const source = clean(value.source, "", 96).replace(/[^a-zA-Z0-9._:-]/g, "-");
+  if (!source) throw new Error("Token usage source is required.");
+  const usage = {
+    source,
+    model: clean(value.model, "", 160),
+    mode: value.mode === "delta" ? "delta" : "cumulative",
+    reportedAt: value.reportedAt ? normalizeDate(value.reportedAt) : occurredAt,
+    inputTokens: tokenCount(value.inputTokens, "inputTokens"),
+    cachedInputTokens: tokenCount(value.cachedInputTokens, "cachedInputTokens"),
+    outputTokens: tokenCount(value.outputTokens, "outputTokens"),
+    reasoningTokens: tokenCount(value.reasoningTokens, "reasoningTokens"),
+    totalTokens: tokenCount(value.totalTokens, "totalTokens"),
+  };
+  if ([usage.inputTokens, usage.cachedInputTokens, usage.outputTokens, usage.reasoningTokens, usage.totalTokens].every((count) => count === null)) {
+    throw new Error("Token usage must include at least one counter.");
+  }
+  return usage;
+}
+
+function usageInstanceId(value, runId, agent) {
+  return clean(value, `legacy:${runId}:${agent}`, 180) || `legacy:${runId}:${agent}`;
+}
+
+function storeUsage(database, projectId, runId, agent, agentInstanceId, usage) {
+  const existing = database.prepare(`
+    SELECT input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, updated_at
+    FROM agent_usage
+    WHERE project_id = ? AND run_id = ? AND agent_instance_id = ? AND source = ? AND model = ?
+  `).get(projectId, runId, agentInstanceId, usage.source, usage.model);
+  const previous = (field) => existing?.[field] === null || existing?.[field] === undefined ? null : Number(existing[field]);
+  const merge = (field, value) => {
+    if (usage.mode === "delta") return value === null ? previous(field) : (previous(field) ?? 0) + value;
+    if (existing && Date.parse(usage.reportedAt) < Date.parse(String(existing.updated_at))) return previous(field);
+    return value ?? previous(field);
+  };
+  const updatedAt = existing && Date.parse(usage.reportedAt) < Date.parse(String(existing.updated_at))
+    ? String(existing.updated_at)
+    : usage.reportedAt;
+  database.prepare(`
+    INSERT INTO agent_usage (
+      project_id, run_id, agent_instance_id, agent, source, model, usage_mode,
+      input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, run_id, agent_instance_id, source, model) DO UPDATE SET
+      agent = excluded.agent, usage_mode = excluded.usage_mode,
+      input_tokens = excluded.input_tokens, cached_input_tokens = excluded.cached_input_tokens,
+      output_tokens = excluded.output_tokens, reasoning_tokens = excluded.reasoning_tokens,
+      total_tokens = excluded.total_tokens, updated_at = excluded.updated_at
+  `).run(
+    projectId, runId, agentInstanceId, agent, usage.source, usage.model, usage.mode,
+    merge("input_tokens", usage.inputTokens), merge("cached_input_tokens", usage.cachedInputTokens),
+    merge("output_tokens", usage.outputTokens), merge("reasoning_tokens", usage.reasoningTokens),
+    merge("total_tokens", usage.totalTokens), updatedAt,
+  );
 }
 
 function logReporter(stage, error, event) {
@@ -190,6 +279,9 @@ function exportMarkdown(database, event, projectId, runId) {
 
 export function writeDirect(event) {
   event = normalizeEventAgentIds(event);
+  // Reject malformed optional usage before opening SQLite so fallback failures
+  // cannot leave a local database handle open or affect lifecycle reporting.
+  const usage = normalizeUsage(event.usage, event.occurredAt);
   const target = databasePath();
   mkdirSync(path.dirname(target), { recursive: true });
   const database = new DatabaseSync(target);
@@ -210,7 +302,10 @@ export function writeDirect(event) {
   try {
     database.prepare("INSERT INTO projects (id, name, path, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, path = excluded.path, last_seen_at = excluded.last_seen_at").run(projectId, event.projectName, event.projectPath, receivedAt);
     database.prepare("INSERT INTO runs (id, project_id, source_run_id, quest, status, started_at, completed_at, updated_at, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quest = CASE WHEN excluded.quest <> '' THEN excluded.quest ELSE runs.quest END, status = CASE WHEN excluded.status = 'complete' THEN 'complete' ELSE runs.status END, completed_at = COALESCE(runs.completed_at, excluded.completed_at), updated_at = excluded.updated_at, outcome = COALESCE(excluded.outcome, runs.outcome)").run(runId, projectId, event.runId, event.quest, terminal ? "complete" : "working", event.occurredAt, terminal ? event.occurredAt : null, receivedAt, outcome);
-    database.prepare("INSERT OR IGNORE INTO events (event_id, source_event_id, project_id, run_id, agent, agent_type, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(scopedStorageId("event", projectId, event.eventId), event.eventId, projectId, runId, event.agent, event.agentType, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
+    const result = database.prepare("INSERT OR IGNORE INTO events (event_id, source_event_id, project_id, run_id, agent, agent_type, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(scopedStorageId("event", projectId, event.eventId), event.eventId, projectId, runId, event.agent, event.agentType, event.status, event.message, event.quest, event.from || null, event.occurredAt, receivedAt, event.agentInstanceId || null);
+    if (Number(result.changes) > 0 && usage) {
+      storeUsage(database, projectId, runId, event.agent, usageInstanceId(event.agentInstanceId, runId, event.agent), usage);
+    }
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");

@@ -14,18 +14,23 @@ import type {
   CatalogAgent,
   DashboardPayload,
   GuildAgentActivity,
+  HistoryPayload,
+  HistoryQuery,
+  HistoryRunSummary,
   GuildStorageHealth,
   GuildStatistics,
   GuildProject,
   GuildRun,
   IncomingGuildEvent,
   StoredGuildEvent,
+  TokenUsageReceipt,
+  TokenUsageSummary,
 } from "@/lib/guild-contract";
 
 const DEFAULT_STORAGE_ROOT = path.join(homedir(), ".lanternwatch");
 const roomStatuses = new Set<RoomStatus>(["waiting", "queued", "working", "complete", "interrupted", "stalled"]);
 const STALE_AFTER_SECONDS = Number(process.env.LANTERNWATCH_STALE_AFTER_SECONDS || 600);
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 type DatabaseState = {
   database: DatabaseSync;
@@ -168,6 +173,26 @@ function ensureSchema(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS events_run_id ON events(run_id, id);
     CREATE INDEX IF NOT EXISTS events_project_agent_run ON events(project_id, agent, run_id);
     CREATE INDEX IF NOT EXISTS runs_project_updated ON runs(project_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      agent_instance_id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      source TEXT NOT NULL,
+      model TEXT NOT NULL DEFAULT '',
+      usage_mode TEXT NOT NULL CHECK(usage_mode IN ('cumulative', 'delta')),
+      input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+      cached_input_tokens INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+      output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+      reasoning_tokens INTEGER CHECK(reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+      total_tokens INTEGER CHECK(total_tokens IS NULL OR total_tokens >= 0),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, run_id, agent_instance_id, source, model)
+    );
+    CREATE INDEX IF NOT EXISTS runs_updated_id ON runs(updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS events_agent_run ON events(agent, run_id);
+    CREATE INDEX IF NOT EXISTS events_run_occurred ON events(run_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS agent_usage_run_agent ON agent_usage(project_id, run_id, agent);
   `);
   const runColumns = database.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
   if (!runColumns.some((column) => column.name === "outcome")) database.exec("ALTER TABLE runs ADD COLUMN outcome TEXT");
@@ -272,6 +297,83 @@ function safeStatus(value: unknown): RoomStatus {
     : "working";
 }
 
+type NormalizedUsage = {
+  source: string;
+  model: string;
+  mode: "cumulative" | "delta";
+  reportedAt: string;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+};
+
+function tokenCount(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`);
+  return value;
+}
+
+function normalizeUsage(value: TokenUsageReceipt | undefined, occurredAt: string): NormalizedUsage | null {
+  if (!value) return null;
+  const source = cleanText(value.source, "", 96).replace(/[^a-zA-Z0-9._:-]/g, "-");
+  if (!source) throw new Error("Token usage source is required.");
+  const usage: NormalizedUsage = {
+    source,
+    model: cleanText(value.model, "", 160),
+    mode: value.mode === "delta" ? "delta" : "cumulative",
+    reportedAt: value.reportedAt ? normalizeDate(value.reportedAt) : occurredAt,
+    inputTokens: tokenCount(value.inputTokens, "inputTokens"),
+    cachedInputTokens: tokenCount(value.cachedInputTokens, "cachedInputTokens"),
+    outputTokens: tokenCount(value.outputTokens, "outputTokens"),
+    reasoningTokens: tokenCount(value.reasoningTokens, "reasoningTokens"),
+    totalTokens: tokenCount(value.totalTokens, "totalTokens"),
+  };
+  if ([usage.inputTokens, usage.cachedInputTokens, usage.outputTokens, usage.reasoningTokens, usage.totalTokens].every((count) => count === null)) {
+    throw new Error("Token usage must include at least one counter.");
+  }
+  return usage;
+}
+
+function usageInstanceId(value: unknown, runId: string, agent: string) {
+  return cleanText(value, `legacy:${runId}:${agent}`, 180) || `legacy:${runId}:${agent}`;
+}
+
+function storeUsage(database: DatabaseSync, projectId: string, runId: string, agent: string, agentInstanceId: string, usage: NormalizedUsage) {
+  const existing = database.prepare(`
+    SELECT input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, updated_at
+    FROM agent_usage
+    WHERE project_id = ? AND run_id = ? AND agent_instance_id = ? AND source = ? AND model = ?
+  `).get(projectId, runId, agentInstanceId, usage.source, usage.model) as Record<string, unknown> | undefined;
+  const previous = (field: string) => existing?.[field] === null || existing?.[field] === undefined ? null : Number(existing[field]);
+  const merge = (field: string, value: number | null) => {
+    if (usage.mode === "delta") return value === null ? previous(field) : (previous(field) ?? 0) + value;
+    if (existing && Date.parse(usage.reportedAt) < Date.parse(String(existing.updated_at))) return previous(field);
+    return value ?? previous(field);
+  };
+  const updatedAt = existing && Date.parse(usage.reportedAt) < Date.parse(String(existing.updated_at))
+    ? String(existing.updated_at)
+    : usage.reportedAt;
+  database.prepare(`
+    INSERT INTO agent_usage (
+      project_id, run_id, agent_instance_id, agent, source, model, usage_mode,
+      input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, run_id, agent_instance_id, source, model) DO UPDATE SET
+      agent = excluded.agent, usage_mode = excluded.usage_mode,
+      input_tokens = excluded.input_tokens, cached_input_tokens = excluded.cached_input_tokens,
+      output_tokens = excluded.output_tokens, reasoning_tokens = excluded.reasoning_tokens,
+      total_tokens = excluded.total_tokens, updated_at = excluded.updated_at
+  `).run(
+    projectId, runId, agentInstanceId, agent, usage.source, usage.model, usage.mode,
+    merge("input_tokens", usage.inputTokens), merge("cached_input_tokens", usage.cachedInputTokens),
+    merge("output_tokens", usage.outputTokens), merge("reasoning_tokens", usage.reasoningTokens),
+    // Totals are stored only when the receipt explicitly guarantees one. They are never derived from components.
+    merge("total_tokens", usage.totalTokens), updatedAt,
+  );
+}
+
 function rowToProject(row: Record<string, unknown>): GuildProject {
   return {
     id: String(row.id),
@@ -315,6 +417,59 @@ function rowToEvent(row: Record<string, unknown>, startedAt: string): StoredGuil
     occurredAt,
     elapsedSeconds: Math.max(0, Math.floor((Date.parse(occurredAt) - Date.parse(startedAt)) / 1000)),
     agentInstanceId: row.agent_instance_id ? String(row.agent_instance_id) : null,
+  };
+}
+
+function tokenUsageSummary(database: DatabaseSync, filters: { projectId?: string; runId?: string; agent?: string }): TokenUsageSummary {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  const eventClauses: string[] = [];
+  const eventParams: string[] = [];
+  const add = (column: string, value: string | undefined) => {
+    if (!value) return;
+    clauses.push(`${column} = ?`);
+    params.push(value);
+    eventClauses.push(`${column.replace("agent_usage", "events")} = ?`);
+    eventParams.push(value);
+  };
+  add("agent_usage.project_id", filters.projectId);
+  add("agent_usage.run_id", filters.runId);
+  add("agent_usage.agent", filters.agent);
+  const usageWhere = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const eventWhere = eventClauses.length ? `WHERE ${eventClauses.join(" AND ")}` : "";
+  const usageRows = database.prepare(`
+    SELECT agent, run_id, project_id, agent_instance_id, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens
+    FROM agent_usage ${usageWhere}
+  `).all(...params) as Record<string, unknown>[];
+  const instances = database.prepare(`
+    SELECT agent, run_id, project_id, agent_instance_id FROM events ${eventWhere}
+  `).all(...eventParams) as Record<string, unknown>[];
+  const totals = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
+  const present = { inputTokens: false, cachedInputTokens: false, outputTokens: false, reasoningTokens: false, totalTokens: false };
+  const reported = new Set<string>();
+  for (const row of usageRows) {
+    const key = `${row.project_id}:${row.run_id}:${row.agent}:${row.agent_instance_id}`;
+    const values: Array<[keyof typeof totals, string]> = [
+      ["inputTokens", "input_tokens"], ["cachedInputTokens", "cached_input_tokens"], ["outputTokens", "output_tokens"], ["reasoningTokens", "reasoning_tokens"], ["totalTokens", "total_tokens"],
+    ];
+    let hasUsage = false;
+    for (const [name, column] of values) {
+      if (row[column] === null || row[column] === undefined) continue;
+      totals[name] += Number(row[column]);
+      present[name] = true;
+      hasUsage = true;
+    }
+    if (hasUsage) reported.add(key);
+  }
+  const knownInstances = new Set(instances.map((row) => `${row.project_id}:${row.run_id}:${row.agent}:${usageInstanceId(row.agent_instance_id, String(row.run_id), String(row.agent))}`));
+  return {
+    inputTokens: present.inputTokens ? totals.inputTokens : null,
+    cachedInputTokens: present.cachedInputTokens ? totals.cachedInputTokens : null,
+    outputTokens: present.outputTokens ? totals.outputTokens : null,
+    reasoningTokens: present.reasoningTokens ? totals.reasoningTokens : null,
+    totalTokens: present.totalTokens ? totals.totalTokens : null,
+    reportedAgentInstances: reported.size,
+    unreportedAgentInstances: Math.max(0, knownInstances.size - reported.size),
   };
 }
 
@@ -378,6 +533,7 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
   const from = input.from ? safeAgent(input.from) : null;
   const sourceRunId = cleanText(input.runId, `${projectId}-${occurredAt.slice(0, 19)}`, 180);
   const runId = resolveRunStorageId(database, projectId, sourceRunId);
+  const usage = normalizeUsage(input.usage, occurredAt);
   const storedEventId = scopedStorageId("event", projectId, eventId);
   const receivedAt = new Date().toISOString();
   const runComplete = input.runComplete === true || status === "interrupted";
@@ -414,6 +570,9 @@ export function recordGuildEvent(input: IncomingGuildEvent) {
         (event_id, source_event_id, project_id, run_id, agent, agent_type, status, message, quest, from_agent, occurred_at, received_at, agent_instance_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(storedEventId, eventId, projectId, runId, agent, agentType, status, message, quest || null, from, occurredAt, receivedAt, cleanText(input.agentInstanceId, "", 180) || null);
+    if (Number(result.changes) > 0 && usage) {
+      storeUsage(database, projectId, runId, agent, usageInstanceId(input.agentInstanceId, runId, agent), usage);
+    }
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -532,7 +691,10 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
   const recentRows = (selectedProjectId
     ? database.prepare("SELECT * FROM runs WHERE project_id = ? ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(selectedProjectId, staleCutoff)
     : database.prepare("SELECT * FROM runs ORDER BY CASE WHEN status = 'working' AND updated_at >= ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 24").all(staleCutoff)) as Record<string, unknown>[];
-  const runs = recentRows.map(rowToRun);
+  const runs = recentRows.map((row) => {
+    const run = rowToRun(row);
+    return { ...run, tokenUsage: tokenUsageSummary(database, { projectId: run.projectId, runId: run.id }) };
+  });
   const requestedRow = requestedRunId ? (selectedProjectId
     ? database.prepare(`
         SELECT * FROM runs
@@ -544,7 +706,12 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
         WHERE id = ? OR source_run_id = ?
         ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
       `).get(requestedRunId, requestedRunId, requestedRunId)) as Record<string, unknown> | undefined : undefined;
-  const run = requestedRow ? rowToRun(requestedRow) : runs[0] ?? null;
+  const run = requestedRow
+    ? (() => {
+      const selected = rowToRun(requestedRow);
+      return { ...selected, tokenUsage: tokenUsageSummary(database, { projectId: selected.projectId, runId: selected.id }) };
+    })()
+    : runs[0] ?? null;
   const eventRows = run
     ? database.prepare("SELECT * FROM events WHERE run_id = ? AND project_id = ? ORDER BY occurred_at, id").all(run.id, run.projectId) as Record<string, unknown>[]
     : [];
@@ -612,6 +779,9 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     }))
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   for (const activity of agentActivities) metricFor(activity.agent).activeInstances += 1;
+  for (const metric of Object.values(agentMetrics)) {
+    metric.tokenUsage = tokenUsageSummary(database, { projectId: selectedProjectId ?? undefined, agent: metric.agent });
+  }
 
   const aggregate = (selectedProjectId ? database.prepare(`
     SELECT COUNT(*) AS total_runs,
@@ -649,9 +819,89 @@ export function getDashboard(projectId?: string | null, requestedRunId?: string 
     totalRuntimeSeconds,
     mostUsedAgent: mostUsedAgentRuns > 0 ? mostUsedAgent : null,
     mostUsedAgentRuns,
+    tokenUsage: tokenUsageSummary(database, { projectId: selectedProjectId ?? undefined }),
   };
   const agentWorkspacePaths = [...new Set([...projects.map((project) => project.path), process.cwd()])];
   return { projects, selectedProjectId, run, runs, events, recentEvents, agentActivities, agentRunCounts, agentMetrics, agentCatalog: catalogResult.agents, agentCatalogSettings: catalogResult.settings, agentWorkspacePaths, statistics, serverTime };
+}
+
+export class HistoryQueryError extends Error {
+  readonly code: "invalid-project";
+
+  constructor(code: "invalid-project") {
+    super(code);
+    this.code = code;
+  }
+}
+
+export function getHistory(query: HistoryQuery): HistoryPayload {
+  const database = getDatabase();
+  if (query.projectId) {
+    const project = database.prepare("SELECT 1 FROM projects WHERE id = ?").get(query.projectId);
+    if (!project) throw new HistoryQueryError("invalid-project");
+  }
+  const staleCutoff = new Date(Date.now() - STALE_AFTER_SECONDS * 1000).toISOString();
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (query.projectId) { clauses.push("runs.project_id = ?"); params.push(query.projectId); }
+  if (query.status === "active") { clauses.push("runs.status = 'working' AND runs.updated_at >= ?"); params.push(staleCutoff); }
+  if (query.status === "stalled") { clauses.push("runs.status = 'working' AND runs.updated_at < ?"); params.push(staleCutoff); }
+  if (query.status === "completed") clauses.push("runs.status = 'complete' AND COALESCE(runs.outcome, 'complete') = 'complete'");
+  if (query.status === "interrupted") clauses.push("runs.outcome = 'interrupted'");
+  if (query.agent) {
+    clauses.push("EXISTS (SELECT 1 FROM events agent_events WHERE agent_events.project_id = runs.project_id AND agent_events.run_id = runs.id AND agent_events.agent = ?)");
+    params.push(query.agent);
+  }
+  if (query.q) {
+    const pattern = `%${query.q}%`;
+    clauses.push(`(
+      runs.quest LIKE ? OR runs.source_run_id LIKE ? OR projects.name LIKE ? OR
+      EXISTS (SELECT 1 FROM events search_events WHERE search_events.project_id = runs.project_id AND search_events.run_id = runs.id AND (search_events.message LIKE ? OR search_events.quest LIKE ?))
+    )`);
+    params.push(pattern, pattern, pattern, pattern, pattern);
+  }
+  if (query.from) { clauses.push("runs.updated_at >= ?"); params.push(query.from); }
+  if (query.to) { clauses.push("runs.updated_at <= ?"); params.push(query.to); }
+  const baseWhere = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const count = database.prepare(`SELECT COUNT(*) AS count FROM runs JOIN projects ON projects.id = runs.project_id ${baseWhere}`).get(...params) as { count: number };
+  const pageClauses = [...clauses];
+  const pageParams = [...params];
+  if (query.cursor) {
+    pageClauses.push("(runs.updated_at < ? OR (runs.updated_at = ? AND runs.id < ?))");
+    pageParams.push(query.cursor.updatedAt, query.cursor.updatedAt, query.cursor.id);
+  }
+  const pageWhere = pageClauses.length ? `WHERE ${pageClauses.join(" AND ")}` : "";
+  const rows = database.prepare(`
+    SELECT runs.*, projects.name AS project_name
+    FROM runs JOIN projects ON projects.id = runs.project_id
+    ${pageWhere}
+    ORDER BY runs.updated_at DESC, runs.id DESC
+    LIMIT ?
+  `).all(...pageParams, query.limit + 1) as Record<string, unknown>[];
+  const hasMore = rows.length > query.limit;
+  const page = rows.slice(0, query.limit);
+  const items: HistoryRunSummary[] = page.map((row) => {
+    const run = rowToRun(row);
+    const facts = database.prepare(`
+      SELECT COUNT(*) AS event_count FROM events WHERE project_id = ? AND run_id = ?
+    `).get(run.projectId, run.id) as { event_count: number };
+    const participants = (database.prepare(`
+      SELECT DISTINCT agent FROM events WHERE project_id = ? AND run_id = ? ORDER BY agent
+    `).all(run.projectId, run.id) as Array<{ agent: string }>).map((participant) => safeAgent(participant.agent));
+    return {
+      ...run,
+      projectName: String(row.project_name),
+      eventCount: Number(facts.event_count),
+      participants,
+      tokenUsage: tokenUsageSummary(database, { projectId: run.projectId, runId: run.id }),
+    };
+  });
+  const last = items.at(-1);
+  return {
+    items,
+    totalMatches: Number(count.count),
+    nextCursor: hasMore && last ? { updatedAt: last.updatedAt, id: last.id } : null,
+  };
 }
 
 export function getCatalogDependencies() {
